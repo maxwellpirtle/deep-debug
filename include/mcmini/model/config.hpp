@@ -53,6 +53,17 @@ struct config {
   bool use_multithreaded_fork = false;
 
   /**
+   * Whether to print every trace, or one those that cause a bug
+   */
+  bool verbose = false;
+
+  /**
+   * Whether the STDOUT/STDERR of the program is sent to /dev/null during
+   * execution
+   */
+  bool quiet_program_output = false;
+
+  /**
    * The time between consecutive checkpoint images when `libmcmini.so` is
    * running in record mode.
    */
