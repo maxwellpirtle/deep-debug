@@ -200,7 +200,8 @@ void do_model_checking(const config& config) {
                          : mcconfig::exploration_policy::smallest_first;
 
   model_checking::classic_dpor classic_dpor_checker(std::move(mc_config));
-  c.trace_completed = &finished_trace_classic_dpor;
+  if (config.verbose)
+    c.trace_completed = &finished_trace_classic_dpor;
   c.deadlock = &found_deadlock;
   c.undefined_behavior = &found_undefined_behavior;
   c.abnormal_termination = &found_abnormal_termination;
@@ -448,6 +449,14 @@ int main_cpp(int argc, const char** argv) {
                strcmp(cur_arg[0], "-mtf") == 0) {
       mcmini_config.use_multithreaded_fork = true;
       cur_arg++;
+    } else if (strcmp(cur_arg[0], "--verbose") == 0 ||
+               strcmp(cur_arg[0], "-v") == 0) {
+      mcmini_config.verbose = true;
+      cur_arg++;
+    } else if (strcmp(cur_arg[0], "--quiet-program-output") == 0 ||
+               strcmp(cur_arg[0], "-q") == 0) {
+      mcmini_config.quiet_program_output = true;
+      cur_arg++;
     } else if (cur_arg[0][1] == 'm' && isdigit(cur_arg[0][2])) {
       mcmini_config.max_thread_execution_depth =
           strtoul(cur_arg[1], nullptr, 10);
@@ -481,6 +490,8 @@ int main_cpp(int argc, const char** argv) {
           "              [--first-deadlock|--first|-f]\n"
           "              [--round-robin|-rr]\n"
           "              [--log-level|-log <level>]\n"
+          "              [--verbose|-v]\n"
+          "              [--quiet-program-output|-q]\n"
           "              [--help|-h]\n"
           "              target_executable\n");
       exit(1);
