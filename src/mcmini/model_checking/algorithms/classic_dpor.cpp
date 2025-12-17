@@ -1,7 +1,4 @@
-#include "mcmini/model_checking/algorithms/classic_dpor.hpp"
-
-#include <sys/types.h>
-
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <csignal>
@@ -11,8 +8,15 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <sys/types.h>
 #include <unordered_set>
 #include <vector>
+
+#ifndef MCMINI_USE_SCIP
+#include "scip/scip.h"
+#include "scip/scipdefplugins.h"
+#include <numeric>
+#endif
 
 #include "mcmini/coordinator/coordinator.hpp"
 #include "mcmini/defines.h"
@@ -25,6 +29,7 @@
 #include "mcmini/model/transitions/mutex/mutex_init.hpp"
 #include "mcmini/model/transitions/semaphore/callbacks.hpp"
 #include "mcmini/model/transitions/thread/callbacks.hpp"
+#include "mcmini/model_checking/algorithms/classic_dpor.hpp"
 #include "mcmini/model_checking/algorithms/classic_dpor/clock_vector.hpp"
 #include "mcmini/model_checking/algorithms/classic_dpor/runner_item.hpp"
 #include "mcmini/model_checking/algorithms/classic_dpor/stack_item.hpp"
@@ -45,12 +50,20 @@ struct classic_dpor::dpor_context {
 public:
   const size_t state_stack_size() const { return stack.size(); }
   const size_t transition_stack_size() const {
-    size_t ss = state_stack_size();
-    return ss > 1 ? (ss - 1) : 0;
+    const size_t ss = state_stack_size();
+    return ss > 0 ? (ss - 1) : 0;
   }
 
   const transition *get_transition(int i) const {
     return stack.at(i).get_out_transition();
+  }
+
+  const transition *get_transition(size_t i) const {
+    return stack.at(i).get_out_transition();
+  }
+
+  const runner_id_t tid(size_t i) const {
+    return get_transition(i)->get_executor();
   }
 
   const clock_vector &clock(size_t j) const {
@@ -82,8 +95,9 @@ public:
     }
     return false;
   }
-  std::vector<const transition *> linearize_lowest_first();
-  std::vector<const transition *> linearize_greedy() { return {}; }
+  std::vector<std::vector<size_t>> transitive_reduction() const;
+  std::vector<const transition *> linearize_lowest_first() const;
+  std::vector<const transition *> linearize_optimal() const;
 };
 
 clock_vector classic_dpor::accumulate_max_clock_vector_against(
@@ -146,7 +160,7 @@ void classic_dpor::verify_using(coordinator &coordinator,
         if (!reached_max_depth) {
           log_unexpected(dpor_logger)
               << "*** Execution Limit Reached! ***\n\n"
-              << "McMini encountered a trace with" << dpor_stack.size()
+              << "McMini encountered a trace with " << dpor_stack.size()
               << " transitions which is the most that McMini was configured"
               << " to handle in any given trace ("
               << this->config.maximum_total_execution_depth
@@ -202,6 +216,12 @@ void classic_dpor::verify_using(coordinator &coordinator,
         }
 
         this->continue_dpor_by_expanding_trace_with(rid, context);
+        log_info(dpor_logger)
+            << context.coordinator.get_current_program_model();
+        auto lin = context.linearize_optimal();
+        for (auto *t : lin) {
+          log_info(dpor_logger) << t->debug_string();
+        }
         model_checking_stats.total_transitions++;
 
         // Now ask the question: will the next operation of this thread
@@ -564,30 +584,41 @@ classic_dpor::coenabled_relation_type classic_dpor::default_coenabledness() {
   return cr;
 }
 
-std::vector<const transition *>
-classic_dpor::dpor_context::linearize_lowest_first() {
+std::vector<std::vector<size_t>>
+classic_dpor::dpor_context::transitive_reduction() const {
+  // This code is heavily inspired by the code in the LEDA library
+  // (https://leda.uni-trier.de), specifically the
+  // `LEDA-7.2.2/src/graph/graph_alg/_transclosure.cpp`
+  //
+  // The transitive reduction R of a digraph G is the graph of the fewest arcs
+  // such that a path exists between nodes u and v in G iff a path exists
+  // between u and v in R. Essentially, it's the smallest graph with the same
+  // dependency relation of G.
+  //
+  // In our case, we're considering a trace T := t1, t2, ..., tN of `N`
+  // total transitions. Each transition can be thought of as a node in a digraph
+  // with the edges representing "happens-before" dependencies between them. The
+  // transitive reduction of this digraph then represents those transitions in
+  // an "immediate" race: ti --> tj and for all transitions tk in-between,
+  // either ti --/--> tk or tk --/-->tj.
   if (this->stack.empty())
     return {};
+  const size_t N = this->transition_stack_size();
+  const size_t INF = N + 1;
 
-  // N = number of _transitions_ in the stack
-  // Each element is one _state_, so there's one
-  // less transition
-  const size_t N = this->stack.size() - 1;
-
-  // --- Phase 1 ---
-  // Dependency Graph Construction
-  //
-  //
   // `adj_list` holds the dependencies between every point in the trace. Nodes
   // are representing using integers and correspond to the index in the
   // transition stack.
   //
   // `e in adj_list[i] <--> happens_before(i, e)`.
   //
+  // `redundant[i][j] <---> adj_list[i][j] can be removed in the transition
+  // reduction`
+  //
   // NOTE: For each `i`, the nodes are ordered in topological order. This is
   // because the transitions in the stack are already topologically ordered by
   // construction, and we process nodes in order.
-  std::vector<std::vector<int>> adj_list(N);
+  std::vector<std::vector<size_t>> adj_list(N);
   std::vector<std::vector<bool>> redundant(N);
 
   for (size_t i = 0; i < N; i++) {
@@ -599,29 +630,33 @@ classic_dpor::dpor_context::linearize_lowest_first() {
     }
   }
 
-  // --- Phase 2 ---
   // Compute Chain Decomposition
   //
   // Decomposes the DAG into a minimum number of disjoint paths (chains).
+  //
+  //  chain_id[v]: index of the chain containing v
+  //  C[h]: list of nodes in chain h
+  //
+  // See Dilworth's theorem.
   std::vector<bool> unmarked(N, true);
-  std::vector<int> chain_id(N);  // chain_id[v]: index of the chain containing v
-  std::vector<std::list<int>> C; // C[h]: list of nodes in chain h
+  std::vector<size_t> chain_id(N);
+  std::vector<std::list<size_t>> C;
 
   // Iterating in increasing topological order (see note above)
   for (size_t v = 0; v < N; ++v) {
     if (unmarked[v]) {
       C.emplace_back(); // Start a new chain
-      int current_chain_id = C.size() - 1;
-      int current_node = v;
+      size_t current_chain_id = C.size() - 1;
+      size_t current_node = v;
 
-      while (current_node != -1) {
+      while (current_node != INF) {
         C.back().push_back(current_node);
         chain_id[current_node] = current_chain_id;
         unmarked[current_node] = false;
 
-        int next_node = -1;
         // Find the first unmarked neighbor 'w' (smallest topological rank)
-        for (int w : adj_list[current_node]) {
+        size_t next_node = INF;
+        for (size_t w : adj_list[current_node]) {
           if (unmarked[w]) {
             next_node = w;
             break;
@@ -632,14 +667,15 @@ classic_dpor::dpor_context::linearize_lowest_first() {
     }
   }
 
-  // --- Phase 2: Compute Reachability and Redundancy ---
-  // reach[i][c]: min{j ; node j in C[c] and path i -> j exists}
+  // Compute Reachability and Redundancy
+  //
+  // reach[i][c] = min{j ; node j in C[c] and path i -> j exists}
+  //
   // where "<" refers to topological order
   //
   // Intuitively, `reach[i][c]` denotes the "smallest" (topologically-speaking)
-  // node in chain `c` that has a path to node `i`.
+  // node in chain `c` to which `i` has a path.
   const int num_chains = C.size();
-  const int INF = N + 1;
   std::vector<std::vector<int>> reach(N, std::vector<int>(num_chains, INF));
 
   // The key loop: iterates in DECREASING topological order
@@ -652,7 +688,6 @@ classic_dpor::dpor_context::linearize_lowest_first() {
       if (w < reach[v][chain_id[w]]) {
         redundant[v][i /* INDEX of w */] = false;
 
-        // Update reach[i] using reach[j]:
         // If v can reach w via a non-redundant edge, v can reach everything j
         // reaches.
         for (int c = 0; c < num_chains; ++c)
@@ -662,7 +697,6 @@ classic_dpor::dpor_context::linearize_lowest_first() {
     reach[v][chain_id[v]] = v;
   }
 
-  // --- Phase 3 ---
   // Remove redundant edges from the adjacency list
   for (size_t k = 0; k < N; k++) {
     auto &out_edges = adj_list[k];
@@ -692,27 +726,408 @@ classic_dpor::dpor_context::linearize_lowest_first() {
         // Not in adj so ok in `false` case
       }
 #endif
+  return adj_list;
+}
 
-  // --- Phase 4 ---
-  // Topological Sort and Final Processing
-  // Generate a topological sort using the newly reduced dependency graph
-  std::vector<int> linearization;
-  std::vector<int> ready_set; // Indicies into the transition stack
+std::vector<const transition *>
+classic_dpor::dpor_context::linearize_optimal() const {
+#ifndef MCMINI_USE_SCIP
+  // Given a fixed trace `T` of `N` transitions and a happens-before relation
+  // `happens-before_T: [1, N] x [1, N] -> {0, 1}` over the indices of `T`, the
+  // goal is to produce a new trace `T'` such that `happens-before_T(i, j) =
+  // happens-before_T'(i, j)` and such that the number of inversions is
+  // minimized. An inversion is a point in the trace where the thread ID of the
+  // `i`th transition doesn't match the thread ID of the `(i + 1)`th transition.
+  //
+  // The intuition in producing such a trace `T'` is that reasoning about this
+  // trace is "easier" than any other because the number of context switches
+  // (inversions) a user must perform to analyze a new trace is minimized.
+  // Moreover, since `T'` obeys the same "happens-before" relation as the
+  // original trace `T`, it produces the exact same bug.
+  //
+  // We can map relinearization into a graph problem. Let `Tids := {tid : exists
+  // i, T[i]->get_executor() = tid }`. We construct an unweighted, labeled
+  // digraph `K` where
+  //
+  //    1. V(K) := {1, 2, ..., N}
+  //    2. E(K) := {(i, j) in [1, N] x [1, N] : happens-before_T(i, j)}
+  //    3. tid : V -> Tids, tid(v) := T[v].get_executor()
+  //
+  // Since `happens-before_T` is transitive, we note that `K =
+  // Transitive-Closure(K)` since `happens-before_T` is transitive. Moreover,
+  // the array `[1, 2, ..., N]` is a valid topological sorting of `K` since `i >
+  // j --> happens-before_T(i, j) = 0`.
+  //
+  // An equivalent formulation of the problem is to find a topological sorting
+  // of K of minimal inversions. Computing such a minimal topological sort can
+  // be reduced to the sequential ordering problem (SOP) (see
+  // https://people.idsia.ch/~roberto/SOP.pdf for a reference). The SOP problem
+  // is related to the Asymmetric Traveling Salesperson Problem (ATSP). In the
+  // ATSP, the goal is to find a Hamiltonian Cycle in a weighted directed graph
+  // of minimal weight. SOP adds one more constraint and requires that certain
+  // nodes are visited before others based on a relation `R` over the vertices.
+  //
+  // We construct a new graph `G` from `K`. Here, we
+  // note that although the SOP problem and ATSP problems work with cycles, we
+  // can add a source and sink node to our DAG with zero weight edges between
+  // each other and the respective start and end nodes of the digraph (those
+  // with in-degree and out-degree equalt to 0 respectively) to map exactly to
+  // the SOP problem.
+  //
+  // Denote `H := Transitive-Reduction(K)`. Recall each node `v` in `K` and by
+  // proxy `H` corresponds to a transition in the transition stack `T`. Let
+  // `tid(v)` denote the labeling function of `K`. Then let
+  //
+  //    1. V(G) := V(H) + {source, sink}
+  //    2. E(G) := V(H) x V(H) + {(u, sink) : u in V(H), out-degree[u] = 0} +
+  //    {(source, u) : u in V(H), in-degree[u] = 0}}
+  //    3. For all e = (u, v) in E(G),
+  //
+  //       w(e) := if tid(u) == tid(v) || (u == source) || (v == sink) then 0
+  //       else 1
+  //
+  // Let `C := SOP(G, E(H))` denote the Hamiltonian Cycle of minimum weight
+  // subjet to `E(H)`. Then `C := m_1, m_2, ..., m_N` corresponds to the minimal
+  // topological sorting. Clearly, `C` is a valid topological sorting since it
+  // contains all nodes of `H` and in an order obeying `E(H)`. By construction,
+  // the total weight of `C` equals the number of inversions in `C`, since an
+  // edge is weighted iff they are inverted and don't connect either the sink or
+  // source. Since `C` is of minimal weight,. it is also of minimal inversions.
+  //
+  // The SOP instance can be solved by reduction using integer constraints.
+  // Here, we use the Miller-Tucker-Zemlin (MTZ) formulation of the TSP problem.
+  // In MTZ, a variable `x_ij in {0, 1}` is added to represent whether the edge
+  // `(i, j)` is taken. For eache node `v_i`, a variable `u_i` is added to
+  // indicate the order the node is visited in the cycle. Constraints are added
+  // to ensure that exactly one `x_ij` goes into and exits each node and such
+  // that if (i, j) is taken then `u_i < u_j` We can adjust the MTZ to work on
+  // an SOP instance by adding precendence constraints on the variables `u_i` by
+  // always forcing `u_i <= u_j + 1` iff `i` happens-before `j`.
+  //
+  // Reducing the number of variables is key to making the solver efficient.
+  // There are two optimizations we apply in the context of our specific
+  // optimization problem instance:
+  //
+  // A) For each edge (u, v) in E(H), only (u, v) needs to be added to G
+  // since a path that includes (v, u) would not satisfy the ordering
+  // constraint. Moreover, any edge (u', v') in E(K) such that there exists
+  // a node k such that (u', k) and (k, v') in E(H) can be eliminated from
+  // G. This is equivalent to eliminating any edges in G that are contained
+  // in the `Transitive-Closure(H) = K`. In general,
+  //
+  //    1. V(G) := V(H) + {source, sink}
+  //    2. E(G) := E(H) + {(u, v) in V(H) x V(H) : (u, v) and (v, u) not in K} +
+  //    {(u, sink) : u in V(H), out-degree[u] = 0} +
+  //    {(source, u) : u in V(H), in-degree[u] = 0}}
+  //    3. For all e = (u, v) in E(G),
+  //
+  //       w(e) := if tid(u) == tid(v) || (u == source) || (v == sink) then 0
+  //       else 1
+  //
+  // B) We observe the following. Firstly, for any two nodes `(u, v) in
+  // H_TC`, `tid[u] = tid[v] ==> u --> v`. I.e., there is always a
+  // happens-before relation between two nodes of the same label.
+  //
+  // For each sequence V = v_1, v_2, ..., v_r in E(H) such that
+  //
+  //    1. For all i in [1, r) out-degree[u_i] = in-degree[u_(i + 1)] = 1
+  //
+  //    V must appear in the SOP Hamiltonian cycle C of minimal
+  //    weight.
+  //
+  // Informally, given a contiguous "block" of transitions which must appear in
+  // order but are otherwise independent with other transitions except possibly
+  // the first and last transitions of the block, anything that doesn't
+  // "happen-before" the first transition in the block can be placed anywhere
+  // inside the block (otherwise there would be a transitive dependency
+  // somewhere in the block). Since the block ordering "forces" a certain
+  // ordering of the transitions, the number of inversions `I` in the block is
+  // fixed. For any `j` such that `v_1 --/--> j`, `tid[v_1] != tid[j]` and
+  // by transitivity `u --/--> j` and hence `tid[u] != tid[j]` for all u in V.
+  // `u --/--> j` further implies `(u, j) and (j, u) in G` for all `u in C`.
+  // Since `tid[u] != tid[j]`, `w_uj = w_ju = 1`. Since any Hamiltonian cycle
+  // must include all nodes in order, either the edge `(v_1, v_2)` is included
+  // or `(v_1, u_1), ..., (u_n, v_2)` for some `u_l` sequence such that `v_1
+  // --\--> u_1`. Since w_(v_1, v_2) <= 1 but `w_(v_1, u_1) = w_(u_n, v_2)`, the
+  // weight of taking the interior edge instead of two exterior ones smaller
+  // than taking the two outer ones. We can essentially treat (v_1, v_2), ...,
+  // (v_(r-1), v_r) as a subgraph with all incoming and outgoing edges of
+  // weight 1.
+  //
+  // Consequently, we can first group together simple chains and solve the
+  // smaller SOP instance and still obtain the same optimal result.
+  //
+  // To compute the reduced graph, we use the Disjoint Set Union. See
+  // https://cp-algorithms.com/data_structures/disjoint_set_union.html
+  struct dsu {
+    std::vector<size_t> parent;
+    std::vector<size_t> sizes;
+
+  public:
+    dsu(size_t n) : sizes(n, 1) {
+      parent.resize(n);
+      std::iota(parent.begin(), parent.end(), 0);
+    }
+
+    size_t find(size_t i) {
+      if (parent[i] == i)
+        return i;
+      return parent[i] = find(parent[i]);
+    }
+
+    void unite(size_t i, size_t j) {
+      size_t root_i = find(i);
+      size_t root_j = find(j);
+      if (root_i != root_j) {
+        if (sizes[root_i] < sizes[root_j])
+          std::swap(root_i, root_j);
+        parent[root_i] = root_j;
+        sizes[root_i] += sizes[root_j];
+      }
+    }
+  };
+
+  // Let `H_red` be the edge-reduced, transitive reduction graph. For each edge
+  // (u, v) in E(G_tr), if out(u) = in(v) = 1, then we can effectively combine
+  // `u` and `v`  together into a single node iff they refer to transitions run
+  // by the same thread. `supernodes` maps nodes in the reduced graph to the
+  // original graph `H`.
+  //
+  // supernodes[i] = [u_1, u_2, ..., u_(l+1)] <---> (u_j, u_{j+1}) in V(H) and
+  // out-degree[u_j] = in-degree[u_(j+1)] = 1
+  //
+  // The immediate transitive dependencies of supernodes[i].back() = u_(l+1)
+  // are the same as the transitive dependencies of the supernode.
+  const auto H = this->transitive_reduction();
+  const size_t N = H.size();
+  std::vector<size_t> out_degree(N, 0);
+  std::vector<size_t> in_degree(N, 0);
+  std::vector<std::vector<size_t>> supernodes;
+  {
+    dsu dsu(N);
+    {
+      std::vector<size_t> tids(N, 0);
+
+      for (size_t u = 0; u < N; ++u) {
+        out_degree[u] = H[u].size();
+        tids[u] = tid(u);
+        for (size_t v : H[u])
+          in_degree[v]++;
+      }
+
+      for (size_t u = 0; u < N; ++u) {
+        if (out_degree[u] == 1) {
+          size_t v = H[u][0]; // The only neighbor
+          if (in_degree[v] == 1 && tids[u] == tids[v])
+            dsu.unite(u, v);
+        }
+      }
+    }
+    {
+      std::map<size_t, std::vector<size_t>> groups;
+      for (size_t i = 0; i < N; ++i)
+        groups[dsu.find(i)].push_back(i);
+
+      supernodes.reserve(groups.size());
+      for (auto &p : groups)
+        supernodes.push_back(std::move(p.second));
+    }
+  }
+
+  SCIP *scip = nullptr;
+  SCIPcreate(&scip);
+  SCIPincludeDefaultPlugins(scip);
+  SCIPcreateProbBasic(scip, "Minimize_Inversions");
+  SCIPsetObjsense(scip, SCIP_OBJSENSE_MINIMIZE);
+
+  const size_t M = supernodes.size();
+  std::vector<SCIP_VAR *> u(M);
+  std::vector<std::vector<SCIP_VAR *>> x(
+      M + 1, std::vector<SCIP_VAR *>(M + 1, nullptr));
+
+  // Path variables: 1 <= u_i <= M
+  for (size_t i = 0; i < M; i++) {
+    const std::string name = "u_" + std::to_string(i);
+    SCIPcreateVarBasic(scip, &u[i], name.c_str(), 1.0, (double)M, 0.0,
+                       SCIP_VARTYPE_CONTINUOUS);
+    SCIPaddVar(scip, u[i]);
+  }
+
+  // All edges in the transitive reduction, add forward edge x_ij in {0, 1}
+  for (size_t i = 0; i < M; ++i) {
+    for (size_t j : H[supernodes[i].back()]) {
+      assert(i < j);
+      assert(x[i][j] == nullptr);
+      std::string name = "x_" + std::to_string(i) + std::to_string(j);
+      SCIPcreateVarBasic(scip, &x[i][j], name.c_str(), 0.0, 1.0,
+                         tid(i) != tid(j), SCIP_VARTYPE_BINARY);
+      SCIPaddVar(scip, x[i][j]);
+    }
+  }
+
+  // All edges not contained in the transitive closure
+  // Add forward _and_ backward edges x_ij and x_ji
+  for (size_t i = 0; i < M; ++i)
+    for (size_t j = i + 1; j < M; j++)
+      if (!happens_before(supernodes[i].front(), supernodes[j].front())) {
+        assert(x[i][j] == nullptr);
+        assert(x[j][i] == nullptr);
+        const double w_e = tid(i) != tid(j);
+        {
+          const std::string name = "x_" + std::to_string(i) + std::to_string(j);
+          SCIPcreateVarBasic(scip, &x[i][j], name.c_str(), 0.0, 1.0, w_e,
+                             SCIP_VARTYPE_BINARY);
+          SCIPaddVar(scip, x[i][j]);
+        }
+        {
+          const std::string name = "x_" + std::to_string(j) + std::to_string(i);
+          SCIPcreateVarBasic(scip, &x[j][i], name.c_str(), 0.0, 1.0, w_e,
+                             SCIP_VARTYPE_BINARY);
+          SCIPaddVar(scip, x[j][i]);
+        }
+      }
+
+  // Source/sink variables --> only added to DAG's entrances + exits
+  for (size_t i = 0; i < M; ++i) {
+    if (out_degree[supernodes[i].back()] == 0) {
+      const std::string name = "x_" + std::to_string(i) + std::to_string(M + 1);
+      SCIPcreateVarBasic(scip, &x[i][M + 1], name.c_str(), 0.0, 1.0, 0.0,
+                         SCIP_VARTYPE_BINARY);
+      SCIPaddVar(scip, x[i][M + 1]);
+    }
+
+    if (in_degree[supernodes[i].front()] == 0) {
+      const std::string name = "x_" + std::to_string(M + 1) + std::to_string(i);
+      SCIPcreateVarBasic(scip, &x[M + 1][i], name.c_str(), 0.0, 1.0, 0.0,
+                         SCIP_VARTYPE_BINARY);
+      SCIPaddVar(scip, x[M + 1][i]);
+    }
+  }
+
+  // MTZ Constraints
+  // A. Exactly one exit and one entrance per node (including source/sink)
+  for (size_t i = 0; i < M + 1; ++i) {
+    SCIP_CONS *enter_cons = nullptr;
+    SCIP_CONS *leave_cons = nullptr;
+    const std::string enter = "enter_" + std::to_string(i);
+    const std::string leave = "leave_" + std::to_string(i);
+    SCIPcreateConsBasicLinear(scip, &enter_cons, enter.c_str(), 0, nullptr,
+                              nullptr, 1.0, 1.0);
+    SCIPcreateConsBasicLinear(scip, &leave_cons, leave.c_str(), 0, nullptr,
+                              nullptr, 1.0, 1.0);
+    for (size_t j = 0; j < M + 1; ++j) {
+      if (x[i][j])
+        SCIPaddCoefLinear(scip, leave_cons, x[i][j], 1.0);
+      if (x[j][i])
+        SCIPaddCoefLinear(scip, enter_cons, x[j][i], 1.0);
+    }
+    SCIPaddCons(scip, enter_cons);
+    SCIPaddCons(scip, leave_cons);
+    SCIPreleaseCons(scip, &enter_cons);
+    SCIPreleaseCons(scip, &leave_cons);
+  }
+
+  // B. MTZ Subtour Elimination:
+  // -INF <= u_i - u_j + M*x_ij <= (M - 1) for i, j in [1, M], i != j
+  for (size_t i = 0; i < M; ++i) {
+    for (size_t j = 0; j < M; ++j) {
+      if (i == j)
+        continue;
+      SCIP_CONS *cons = nullptr;
+      const std::string name =
+          "subtour_" + std::to_string(i) + "_" + std::to_string(j);
+      SCIPcreateConsBasicLinear(scip, &cons, name.c_str(), 0, nullptr, nullptr,
+                                -SCIPinfinity(scip), (double)(M - 1));
+      SCIPaddCoefLinear(scip, cons, u[i], 1.0);
+      SCIPaddCoefLinear(scip, cons, u[j], -1.0);
+      SCIPaddCoefLinear(scip, cons, x[i][j], (double)M);
+      SCIPaddCons(scip, cons);
+      SCIPreleaseCons(scip, &cons);
+    }
+  }
+
+  // C. Precedence Constraints: INF >= u_target - u_i >= 1
+  for (size_t i = 0; i < M; ++i) {
+    for (size_t target : H[supernodes[i].back()]) {
+      SCIP_CONS *cons = nullptr;
+      const std::string name =
+          "precedence_" + std::to_string(i) + "_" + std::to_string(target);
+      SCIPcreateConsBasicLinear(scip, &cons, name.c_str(), 0, nullptr, nullptr,
+                                1.0, SCIPinfinity(scip));
+      SCIPaddCoefLinear(scip, cons, u[target], 1.0);
+      SCIPaddCoefLinear(scip, cons, u[i], -1.0);
+      SCIPaddCons(scip, cons);
+      SCIPreleaseCons(scip, &cons);
+    }
+  }
+
+  SCIPsolve(scip);
+  SCIP_SOL *sol = SCIPgetBestSol(scip);
+
+  std::vector<size_t> linearization;
+  struct NodePosition {
+    size_t id;
+    double u_value;
+  };
+
+  if (sol != nullptr) {
+    std::vector<NodePosition> sequence(N);
+    for (size_t i = 0; i < M; ++i) {
+      double val = SCIPgetSolVal(scip, sol, u[i]);
+      sequence.push_back({i, val});
+    }
+    std::sort(sequence.begin(), sequence.end(),
+              [](const NodePosition &a, const NodePosition &b) {
+                return a.u_value < b.u_value;
+              });
+    for (const auto &item : sequence)
+      std::move(supernodes[item.id].begin(), supernodes[item.id].end(),
+                std::back_inserter(linearization));
+  } else {
+    std::cerr << "No solution found!" << std::endl;
+    return {};
+  }
+  {
+    for (size_t i = 0; i < N; ++i) {
+      SCIPreleaseVar(scip, &u[i]);
+      for (size_t j = 0; j < N; ++j) {
+        if (x[i][j])
+          SCIPreleaseVar(scip, &x[i][j]);
+      }
+    }
+    SCIPfree(&scip);
+  }
+
+  std::vector<const transition *> linearized_trace(N, nullptr);
+  for (size_t i = 0; i < N; i++)
+    linearized_trace[i] = get_transition(linearization[i]);
+  return linearized_trace;
+#else
+  // Fallback to greedy if SCIP isn't available
+  return linearize_lowest_first();
+#endif
+}
+
+std::vector<const transition *>
+classic_dpor::dpor_context::linearize_lowest_first() const {
+  const auto adj_list = this->transitive_reduction();
+  const size_t N = adj_list.size();
+  const size_t INF = N + 1;
+  std::vector<size_t> linearization;
+  std::vector<size_t> ready_set;
   std::vector<int> in_degree(N, 0);
   for (size_t u = 0; u < N; ++u)
-    for (int v : adj_list[u])
+    for (size_t v : adj_list[u])
       in_degree[v]++;
 
   for (size_t i = 0; i < N; ++i)
     if (in_degree[i] == 0)
       ready_set.push_back(i);
 
-  runner_id_t last_rid = RUNNER_ID_MAX; // -1 indicates no last rid
+  runner_id_t last_rid = RUNNER_ID_MAX;
   while (!ready_set.empty()) {
-    int next_vertex = -1;
-    int selected_index = -1;
-
-    // Find the vertex with the same executor as the last one
+    size_t next_vertex = INF;
+    size_t selected_index = INF;
     if (last_rid != RUNNER_ID_MAX) {
       for (size_t i = 0; i < ready_set.size(); ++i) {
         const runner_id_t r = get_transition(ready_set[i])->get_executor();
@@ -724,9 +1139,8 @@ classic_dpor::dpor_context::linearize_lowest_first() {
       }
     }
 
-    // If no color match, or at the start, pick the thread with the lowest id
-    if (next_vertex == -1) {
-      // INVARIANT: Since mid_rid
+    // If no ID match, or at the start, pick the thread with the lowest id
+    if (next_vertex == INF) {
       runner_id_t min_rid = RID_INVALID;
       for (size_t i = 0; i < ready_set.size(); ++i) {
         const runner_id_t r = get_transition(ready_set[i])->get_executor();
@@ -739,7 +1153,7 @@ classic_dpor::dpor_context::linearize_lowest_first() {
     }
 
     linearization.push_back(next_vertex);
-    last_rid = stack.at(next_vertex).get_out_transition()->get_executor();
+    last_rid = get_transition(next_vertex)->get_executor();
 
     // Remove the selected vertex from the ready set
     // Swap with the back and pop for O(1) removal from vector (since order in S
@@ -755,8 +1169,6 @@ classic_dpor::dpor_context::linearize_lowest_first() {
     }
   }
 
-  // --- Phase 5 ---
-  // Convert the linearization into a transition trace
   std::vector<const transition *> linearized_trace(N, nullptr);
   for (size_t i = 0; i < N; i++)
     linearized_trace[i] = get_transition(linearization[i]);
