@@ -18,6 +18,11 @@ set(MCMINI_DIR "${CMAKE_SOURCE_DIR}")
 set(MCMINI_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/include")
 set(MCMINI_CMAKE_MODULE_DIR "${CMAKE_SOURCE_DIR}/cmake")
 set(MCMINI_WITH_DMTCP OFF)
+set(MCMINI_USE_SCIP OFF)
+
+if(MCMINI_USE_SCIP)
+find_package(scip)
+endif()
 
 # Project source files
 set(MCMINI_C_SRC
@@ -117,6 +122,10 @@ target_compile_options(mcmini
 target_link_libraries(mcmini
   PUBLIC
     "${MCMINI_EXTRA_LINK_FLAGS}")
+if (MCMINI_USE_SCIP)
+target_link_libraries(mcmini PUBLIC scip)
+target_compile_definitions(mcmini PUBLIC MCMINI_USE_SCIP)
+endif()
 
 add_subdirectory(src/examples)
 add_subdirectory(test)
