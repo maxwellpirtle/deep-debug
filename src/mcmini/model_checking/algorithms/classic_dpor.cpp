@@ -12,7 +12,7 @@
 #include <unordered_set>
 #include <vector>
 
-#ifndef MCMINI_USE_SCIP
+#ifdef MCMINI_USE_SCIP
 #include "scip/scip.h"
 #include "scip/scipdefplugins.h"
 #include <numeric>
@@ -723,32 +723,15 @@ classic_dpor::dpor_context::transitive_reduction() const {
   return adj_list;
 }
 
+#ifdef MCMINI_USE_SCIP
 void SCIP_dump(SCIP *scip) {
   SCIP_CALL_ABORT(SCIPprintOrigProblem(scip, nullptr, "lp", false));
-  // SCIP_VAR **vars = SCIPgetVars(scip);
-  // std::cout << "=== VARIABLES ===\n";
-  // for (int i = 0; vars[i] != nullptr; ++i) {
-  //   SCIP_VAR *var = vars[i];
-  //   std::cout << "var[" << i << "]: " << SCIPvarGetName(var)
-  //             << "  lb = " << SCIPvarGetLbGlobal(var)
-  //             << "  ub = " << SCIPvarGetUbGlobal(var) << "\n";
-  // }
-
-  // SCIP_CONS **conss = SCIPgetConss(scip);
-  // std::cout << "\n=== CONSTRAINTS ===\n";
-  // for (int i = 0; conss[i] != nullptr; ++i) {
-  //   SCIP_CONS *cons = conss[i];
-  //   const char *name = SCIPconsGetName(cons);
-  //   std::cout << "cons[" << i << "]: " << (name ? name : "<no name>") <<
-  //   "\n"; SCIP_CALL_ABORT(SCIPprintCons(scip, cons, stdout)); std::cout <<
-  //   "\n";
-  // }
-  // std::cout << "\n=== DUMP COMPLETE ===" << std::endl;
 }
+#endif
 
 std::vector<const transition *>
 classic_dpor::dpor_context::linearize_optimal() const {
-#ifndef MCMINI_USE_SCIP
+#ifdef MCMINI_USE_SCIP
   // Given a fixed trace `T` of `N` transitions and a happens-before relation
   // `happens-before_T: [1, N] x [1, N] -> {0, 1}` over the indices of `T`, the
   // goal is to produce a new trace `T'` such that `happens-before_T(i, j) =
