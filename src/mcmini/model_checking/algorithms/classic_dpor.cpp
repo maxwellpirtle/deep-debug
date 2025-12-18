@@ -216,12 +216,6 @@ void classic_dpor::verify_using(coordinator &coordinator,
         }
 
         this->continue_dpor_by_expanding_trace_with(rid, context);
-        log_info(dpor_logger)
-            << context.coordinator.get_current_program_model();
-        auto lin = context.linearize_optimal();
-        for (auto *t : lin) {
-          log_info(dpor_logger) << t->debug_string();
-        }
         model_checking_stats.total_transitions++;
 
         // Now ask the question: will the next operation of this thread
@@ -729,6 +723,29 @@ classic_dpor::dpor_context::transitive_reduction() const {
   return adj_list;
 }
 
+void SCIP_dump(SCIP *scip) {
+  SCIP_CALL_ABORT(SCIPprintOrigProblem(scip, nullptr, "lp", false));
+  // SCIP_VAR **vars = SCIPgetVars(scip);
+  // std::cout << "=== VARIABLES ===\n";
+  // for (int i = 0; vars[i] != nullptr; ++i) {
+  //   SCIP_VAR *var = vars[i];
+  //   std::cout << "var[" << i << "]: " << SCIPvarGetName(var)
+  //             << "  lb = " << SCIPvarGetLbGlobal(var)
+  //             << "  ub = " << SCIPvarGetUbGlobal(var) << "\n";
+  // }
+
+  // SCIP_CONS **conss = SCIPgetConss(scip);
+  // std::cout << "\n=== CONSTRAINTS ===\n";
+  // for (int i = 0; conss[i] != nullptr; ++i) {
+  //   SCIP_CONS *cons = conss[i];
+  //   const char *name = SCIPconsGetName(cons);
+  //   std::cout << "cons[" << i << "]: " << (name ? name : "<no name>") <<
+  //   "\n"; SCIP_CALL_ABORT(SCIPprintCons(scip, cons, stdout)); std::cout <<
+  //   "\n";
+  // }
+  // std::cout << "\n=== DUMP COMPLETE ===" << std::endl;
+}
+
 std::vector<const transition *>
 classic_dpor::dpor_context::linearize_optimal() const {
 #ifndef MCMINI_USE_SCIP
@@ -888,21 +905,33 @@ classic_dpor::dpor_context::linearize_optimal() const {
   };
 
   // Let `H_red` be the edge-reduced, transitive reduction graph. For each edge
-  // (u, v) in E(G_tr), if out(u) = in(v) = 1, then we can effectively combine
+  // `(u, v) in E(H)`, if out(u) = in(v) = 1, then we can effectively combine
   // `u` and `v`  together into a single node iff they refer to transitions run
   // by the same thread. `supernodes` maps nodes in the reduced graph to the
   // original graph `H`.
   //
+  // ```
+  // Where `i` refers to a node ID in the reduced graph H_red
   // supernodes[i] = [u_1, u_2, ..., u_(l+1)] <---> (u_j, u_{j+1}) in V(H) and
   // out-degree[u_j] = in-degree[u_(j+1)] = 1
-  //
-  // The immediate transitive dependencies of supernodes[i].back() = u_(l+1)
-  // are the same as the transitive dependencies of the supernode.
+  // ```
+  // Where `i` refers to a member of V(H)
+  // dsu.find(i) = j <---> i is a part of supernode j in the reduced graph
+  //```
+  // The immediate transitive dependencies of `supernodes[i].back()` = u_(l+1)
+  // are the same as the transitive dependencies of the supernode. Moreoever,
+  // using the argument in the proof above, the set of edges
+  // {(u_i, v) in V(H) x V(H) : (u_i, v) and (v, u_i) not in K} is the same for
+  // any u_i. Here, we pick the first one `supernodes[i].front()`
   const auto H = this->transitive_reduction();
   const size_t N = H.size();
   std::vector<size_t> out_degree(N, 0);
   std::vector<size_t> in_degree(N, 0);
+
+  // INVARIANT: supernodes[i] is sorted by ID (and hence sorted in topological
+  // order)
   std::vector<std::vector<size_t>> supernodes;
+  std::unordered_map<size_t, size_t> H_to_supernode;
   {
     dsu dsu(N);
     {
@@ -929,11 +958,32 @@ classic_dpor::dpor_context::linearize_optimal() const {
         groups[dsu.find(i)].push_back(i);
 
       supernodes.reserve(groups.size());
-      for (auto &p : groups)
+      for (auto &p : groups) {
+        const size_t new_supernode_id = supernodes.size();
+        for (size_t i : p.second)
+          H_to_supernode[i] = new_supernode_id;
         supernodes.push_back(std::move(p.second));
+      }
     }
   }
 
+  // In what follows, there are implicitly two graphs:
+  //
+  // 1. The original transitive reduction `H` containing the "happens-before"
+  // DAG wihtout transitive dependencies with `N` nodes.
+  //
+  // 2. The reduced DAG `H_red` with `M <= N` nodes where nodes `(u, v)` in `H`
+  // where `out-degree[u] = in-degree[v] = 1` are combined together to reduce
+  // the number of variables. This graph isn't explicitly stored in memory.
+  // Instead, for each node in `H_red`, a list of back references in `H`
+  // indicating
+  //
+  // Iterations happen over nodes IDs in `H_red`. There a few important
+  // observations (here `i`s and `j`s are over super node indices)
+  // ```
+  // supernode[i].front() --/--> supernode[j].front() --> i -->_S' j
+  // out_degree_super[i] = out_degree[supernodes[i].back()]
+  // in_degree_super[i] = in_degree[supernodes[i].front()]
   SCIP *scip = nullptr;
   SCIPcreate(&scip);
   SCIPincludeDefaultPlugins(scip);
@@ -956,11 +1006,15 @@ classic_dpor::dpor_context::linearize_optimal() const {
   // All edges in the transitive reduction, add forward edge x_ij in {0, 1}
   for (size_t i = 0; i < M; ++i) {
     for (size_t j : H[supernodes[i].back()]) {
+      assert(supernodes[H_to_supernode[j]].front() == j);
+      j = H_to_supernode[j];
       assert(i < j);
       assert(x[i][j] == nullptr);
       std::string name = "x_" + std::to_string(i) + std::to_string(j);
       SCIPcreateVarBasic(scip, &x[i][j], name.c_str(), 0.0, 1.0,
-                         tid(i) != tid(j), SCIP_VARTYPE_BINARY);
+                         tid(supernodes[i].back()) !=
+                             tid(supernodes[j].front()),
+                         SCIP_VARTYPE_BINARY);
       SCIPaddVar(scip, x[i][j]);
     }
   }
@@ -972,7 +1026,8 @@ classic_dpor::dpor_context::linearize_optimal() const {
       if (!happens_before(supernodes[i].front(), supernodes[j].front())) {
         assert(x[i][j] == nullptr);
         assert(x[j][i] == nullptr);
-        const double w_e = tid(i) != tid(j);
+        const double w_e =
+            tid(supernodes[i].back()) != tid(supernodes[j].front());
         {
           const std::string name = "x_" + std::to_string(i) + std::to_string(j);
           SCIPcreateVarBasic(scip, &x[i][j], name.c_str(), 0.0, 1.0, w_e,
@@ -990,17 +1045,17 @@ classic_dpor::dpor_context::linearize_optimal() const {
   // Source/sink variables --> only added to DAG's entrances + exits
   for (size_t i = 0; i < M; ++i) {
     if (out_degree[supernodes[i].back()] == 0) {
-      const std::string name = "x_" + std::to_string(i) + std::to_string(M + 1);
-      SCIPcreateVarBasic(scip, &x[i][M + 1], name.c_str(), 0.0, 1.0, 0.0,
+      const std::string name = "x_" + std::to_string(i) + std::to_string(M);
+      SCIPcreateVarBasic(scip, &x[i][M], name.c_str(), 0.0, 1.0, 0.0,
                          SCIP_VARTYPE_BINARY);
-      SCIPaddVar(scip, x[i][M + 1]);
+      SCIPaddVar(scip, x[i][M]);
     }
 
     if (in_degree[supernodes[i].front()] == 0) {
-      const std::string name = "x_" + std::to_string(M + 1) + std::to_string(i);
-      SCIPcreateVarBasic(scip, &x[M + 1][i], name.c_str(), 0.0, 1.0, 0.0,
+      const std::string name = "x_" + std::to_string(M) + std::to_string(i);
+      SCIPcreateVarBasic(scip, &x[M][i], name.c_str(), 0.0, 1.0, 0.0,
                          SCIP_VARTYPE_BINARY);
-      SCIPaddVar(scip, x[M + 1][i]);
+      SCIPaddVar(scip, x[M][i]);
     }
   }
 
@@ -1031,7 +1086,7 @@ classic_dpor::dpor_context::linearize_optimal() const {
   // -INF <= u_i - u_j + M*x_ij <= (M - 1) for i, j in [1, M], i != j
   for (size_t i = 0; i < M; ++i) {
     for (size_t j = 0; j < M; ++j) {
-      if (i == j)
+      if (!x[i][j])
         continue;
       SCIP_CONS *cons = nullptr;
       const std::string name =
@@ -1049,6 +1104,7 @@ classic_dpor::dpor_context::linearize_optimal() const {
   // C. Precedence Constraints: INF >= u_target - u_i >= 1
   for (size_t i = 0; i < M; ++i) {
     for (size_t target : H[supernodes[i].back()]) {
+      target = H_to_supernode[target];
       SCIP_CONS *cons = nullptr;
       const std::string name =
           "precedence_" + std::to_string(i) + "_" + std::to_string(target);
@@ -1060,7 +1116,6 @@ classic_dpor::dpor_context::linearize_optimal() const {
       SCIPreleaseCons(scip, &cons);
     }
   }
-
   SCIPsolve(scip);
   SCIP_SOL *sol = SCIPgetBestSol(scip);
 
@@ -1071,7 +1126,8 @@ classic_dpor::dpor_context::linearize_optimal() const {
   };
 
   if (sol != nullptr) {
-    std::vector<NodePosition> sequence(N);
+    std::vector<NodePosition> sequence;
+    sequence.reserve(M);
     for (size_t i = 0; i < M; ++i) {
       double val = SCIPgetSolVal(scip, sol, u[i]);
       sequence.push_back({i, val});
@@ -1088,9 +1144,10 @@ classic_dpor::dpor_context::linearize_optimal() const {
     return {};
   }
   {
-    for (size_t i = 0; i < N; ++i) {
-      SCIPreleaseVar(scip, &u[i]);
-      for (size_t j = 0; j < N; ++j) {
+    for (size_t i = 0; i < M + 1; ++i) {
+      if (i < M)
+        SCIPreleaseVar(scip, &u[i]);
+      for (size_t j = 0; j < M + 1; ++j) {
         if (x[i][j])
           SCIPreleaseVar(scip, &x[i][j]);
       }
