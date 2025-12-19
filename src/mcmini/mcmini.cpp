@@ -11,6 +11,7 @@
 #include "mcmini/model/transitions/thread/thread_exit.hpp"
 #include "mcmini/model_checking/algorithm.hpp"
 #include "mcmini/model_checking/algorithms/classic_dpor.hpp"
+#include "mcmini/model_checking/reporter.hpp"
 #include "mcmini/real_world/fifo.hpp"
 #include "mcmini/real_world/process/dmtcp_process_source.hpp"
 #include "mcmini/real_world/process/multithreaded_fork_process_source.hpp"
@@ -43,174 +44,89 @@ using namespace model_checking;
 using namespace objects;
 using namespace real_world;
 
-visible_object_state* translate_recorded_object_to_model(
-    const ::visible_object& recorded_object,
+logging::logger setup_logger("mcmini");
+
+visible_object_state *translate_recorded_object_to_model(
+    const ::visible_object &recorded_object,
     const std::unordered_map<
-        void*, std::vector<std::pair<runner_id_t, condition_variable_status>>>
+        void *, std::vector<std::pair<runner_id_t, condition_variable_status>>>
         cv_waiting_threads) {
   // TODO: A function table would be slightly better, but this works perfectly
   // fine too.
   switch (recorded_object.type) {
-    case MUTEX: {
-      auto mutex_state =
-          static_cast<objects::mutex::state>(recorded_object.mut_state);
-      pthread_mutex_t* mutex_location =
-          (pthread_mutex_t*)recorded_object.location;
-      return new objects::mutex(mutex_state, mutex_location);
-    }
-    case CONDITION_VARIABLE: {
-      // Create the condition variable model object with full state information
-      auto cv_state = static_cast<objects::condition_variable::state>(
-          recorded_object.cond_state.status);
+  case MUTEX: {
+    auto mutex_state =
+        static_cast<objects::mutex::state>(recorded_object.mut_state);
+    pthread_mutex_t *mutex_location =
+        (pthread_mutex_t *)recorded_object.location;
+    return new objects::mutex(mutex_state, mutex_location);
+  }
+  case CONDITION_VARIABLE: {
+    // Create the condition variable model object with full state information
+    auto cv_state = static_cast<objects::condition_variable::state>(
+        recorded_object.cond_state.status);
 
-      runner_id_t interacting_thread =
-          recorded_object.cond_state.interacting_thread;
-      pthread_mutex_t* associated_mutex =
-          recorded_object.cond_state.associated_mutex;
-      int count = recorded_object.cond_state.count;
-      // get waiting threads from the map
-      auto it = cv_waiting_threads.find(recorded_object.location);
-      std::vector<std::pair<runner_id_t, condition_variable_status>>
-          waiters_with_state =
-              (it != cv_waiting_threads.end())
-                  ? it->second
-                  : std::vector<
-                        std::pair<runner_id_t, condition_variable_status>>();
-      return new objects::condition_variable(cv_state, interacting_thread,
-                                             associated_mutex, count,
-                                             waiters_with_state);
-    }
-    case SEMAPHORE: {
-      return new objects::semaphore(static_cast<objects::semaphore::state>(
-                                        recorded_object.sem_state.status),
-                                    recorded_object.sem_state.count);
-    }
-    // Other objects here
-    // case ...  { }
-    // ...
-    default: {
-      std::cerr << "The new object type" << recorded_object.type
-                << "hasn't been implemented yet\n";
-      std::abort();
-    }
+    runner_id_t interacting_thread =
+        recorded_object.cond_state.interacting_thread;
+    pthread_mutex_t *associated_mutex =
+        recorded_object.cond_state.associated_mutex;
+    int count = recorded_object.cond_state.count;
+    // get waiting threads from the map
+    auto it = cv_waiting_threads.find(recorded_object.location);
+    std::vector<std::pair<runner_id_t, condition_variable_status>>
+        waiters_with_state =
+            (it != cv_waiting_threads.end())
+                ? it->second
+                : std::vector<
+                      std::pair<runner_id_t, condition_variable_status>>();
+    return new objects::condition_variable(cv_state, interacting_thread,
+                                           associated_mutex, count,
+                                           waiters_with_state);
+  }
+  case SEMAPHORE: {
+    return new objects::semaphore(static_cast<objects::semaphore::state>(
+                                      recorded_object.sem_state.status),
+                                  recorded_object.sem_state.count);
+  }
+  // Other objects here
+  // case ...  { }
+  // ...
+  default: {
+    std::cerr << "The new object type" << recorded_object.type
+              << "hasn't been implemented yet\n";
+    std::abort();
+  }
   }
 }
 
-runner_state* translate_recorded_runner_to_model(
-    const ::visible_object& recorded_object) {
+runner_state *
+translate_recorded_runner_to_model(const ::visible_object &recorded_object) {
   switch (recorded_object.type) {
-    case THREAD: {
-      return new objects::thread(recorded_object.thrd_state.status);
-    }
-    default: {
-      std::abort();
-    }
+  case THREAD: {
+    return new objects::thread(recorded_object.thrd_state.status);
+  }
+  default: {
+    std::abort();
+  }
   }
 }
 
-void finished_trace_classic_dpor(const coordinator& c, const stats& stats) {
-  std::stringstream ss;
-  const auto& program_model = c.get_current_program_model();
-  ss << "TRACE " << stats.trace_id << "\n";
-  for (const auto& t : program_model.get_trace()) {
-    ss << "thread " << t->get_executor() << ": " << t->to_string() << "\n";
-  }
-  ss << "\nNEXT THREAD OPERATIONS\n";
-  for (const auto& tpair : program_model.get_pending_transitions()) {
-    ss << "thread " << tpair.first << ": " << tpair.second->to_string() << "\n";
-  }
-  std::cout << ss.str();
-  std::cout.flush();
-}
-
-void found_undefined_behavior(const coordinator& c, const stats& stats,
-                              const undefined_behavior_exception& ub) {
-  std::cerr << "UNDEFINED BEHAVIOR:\n" << ub.what() << std::endl;
-  finished_trace_classic_dpor(c, stats);
-}
-
-void found_abnormal_termination(
-    const coordinator& c, const stats& stats,
-    const real_world::process::termination_error& ub) {
-  std::cerr << "Abnormally Termination (signo: " << ub.signo
-            << ", signal: " << sig_to_str.at(ub.signo) << "):\n"
-            << ub.what() << std::endl;
-
-  std::stringstream ss;
-  const auto& program_model = c.get_current_program_model();
-  ss << "TRACE " << stats.trace_id << "\n";
-  for (const auto& t : program_model.get_trace()) {
-    ss << "thread " << t->get_executor() << ": " << t->to_string() << "\n";
-  }
-  const transition* terminator =
-      program_model.get_pending_transition_for(ub.culprit);
-  ss << "thread " << terminator->get_executor() << ": "
-     << terminator->to_string() << "\n";
-
-  ss << "\nNEXT THREAD OPERATIONS\n";
-  for (const auto& tpair : program_model.get_pending_transitions()) {
-    if (tpair.first == terminator->get_executor()) {
-      ss << "thread " << tpair.first << ": executing"
-         << "\n";
-    } else {
-      ss << "thread " << tpair.first << ": " << tpair.second->to_string()
-         << "\n";
-    }
-  }
-  ss << stats.total_transitions + 1 << " total transitions executed"
-     << "\n";
-  std::cout << ss.str();
-  std::cout.flush();
-}
-
-void found_deadlock(const coordinator& c, const stats& stats) {
-  std::cerr << "DEADLOCK" << std::endl;
-  std::stringstream ss;
-  const auto& program_model = c.get_current_program_model();
-  for (const auto& t : program_model.get_trace()) {
-    ss << "thread " << t->get_executor() << ": " << t->to_string() << "\n";
-  }
-  ss << "\nNEXT THREAD OPERATIONS\n";
-  for (const auto& tpair : program_model.get_pending_transitions()) {
-    ss << "thread " << tpair.first << ": " << tpair.second->to_string() << "\n";
-  }
-  std::cout << ss.str();
-  std::cout.flush();
-}
-
-void do_model_checking(const config& config) {
+void do_model_checking(const config &config) {
   algorithm::callbacks c;
   target target_program(config.target_executable,
                         config.target_executable_args);
+  target_program.set_quiet(config.quiet_program_output);
   coordinator coordinator(program::starting_from_main(),
                           transition_registry::default_registry(),
                           make_unique<fork_process_source>(target_program));
-  std::cerr << "\n\n**************** INTIAL STATE *********************\n\n";
-  coordinator.get_current_program_model().dump_state(std::cerr);
-  std::cerr << "\n\n**************** INTIAL STATE *********************\n\n";
-  std::cerr.flush();
-
-  using mcconfig = model_checking::classic_dpor::configuration;
-  mcconfig mc_config;
-  mc_config.maximum_total_execution_depth =
-      config.maximum_total_execution_depth;
-  mc_config.stop_at_first_deadlock = config.stop_at_first_deadlock;
-  mc_config.policy = config.use_round_robin_scheduling
-                         ? mcconfig::exploration_policy::round_robin
-                         : mcconfig::exploration_policy::smallest_first;
-
-  model_checking::classic_dpor classic_dpor_checker(std::move(mc_config));
-  if (config.verbose)
-    c.trace_completed = &finished_trace_classic_dpor;
-  c.deadlock = &found_deadlock;
-  c.undefined_behavior = &found_undefined_behavior;
-  c.abnormal_termination = &found_abnormal_termination;
-  classic_dpor_checker.verify_using(coordinator, c);
+  model_checking::reporter reporter(config);
+  model_checking::classic_dpor classic_dpor_checker(config);
+  classic_dpor_checker.verify_using(coordinator, reporter);
   std::cout << "Model checking completed!" << std::endl;
 }
 
-void do_model_checking_from_dmtcp_ckpt_file(const config& config) {
-  volatile mcmini_shm_file* rw_region =
+void do_model_checking_from_dmtcp_ckpt_file(const config &config) {
+  volatile mcmini_shm_file *rw_region =
       xpc_resources::get_instance().get_rw_region()->as<mcmini_shm_file>();
 
   std::unique_ptr<process_source> dmtcp_template_handle;
@@ -227,7 +143,6 @@ void do_model_checking_from_dmtcp_ckpt_file(const config& config) {
   // Make sure that `dmtcp_restart` has executed and that the template
   // process is ready for execution; otherwise, the state restoration will not
   // work as expected.
-  algorithm::callbacks c;
   transition_registry tr = transition_registry::default_registry();
   coordinator coordinator(program(), tr, std::move(dmtcp_template_handle));
   {
@@ -324,18 +239,15 @@ void do_model_checking_from_dmtcp_ckpt_file(const config& config) {
   std::cerr << "\n\n**************** INTIAL STATE *********************\n\n";
   std::cerr.flush();
 
-  model_checking::classic_dpor classic_dpor_checker;
-  c.trace_completed = &finished_trace_classic_dpor;
-  c.undefined_behavior = &found_undefined_behavior;
-  c.deadlock = &found_deadlock;
-  c.abnormal_termination = &found_abnormal_termination;
-  classic_dpor_checker.verify_using(coordinator, c);
+  model_checking::reporter reporter(config);
+  model_checking::classic_dpor classic_dpor_checker(config);
+  classic_dpor_checker.verify_using(coordinator, reporter);
   std::cerr << "Deep debugging completed!" << std::endl;
 }
 
 #include "mcmini/log/logger.hpp"
 
-void do_recording(const config& config) {
+void do_recording(const config &config) {
   char dir[PATH_MAX];
   // FIXME:  This depends on mcmini starting in root dir of git repo.
   std::string libmcini_dir = getcwd(dir, sizeof(dir)) ? dir : "PATH_TOO_LONG";
@@ -433,6 +345,14 @@ int main_cpp(int argc, const char** argv) {
     } else if ((strcmp(cur_arg[0], "--round-robin") == 0) ||
                strcmp(cur_arg[0], "-rr") == 0) {
       mcmini_config.use_round_robin_scheduling = true;
+      cur_arg += 1;
+    } else if ((strcmp(cur_arg[0], "--optimal-relinearization") == 0) ||
+               strcmp(cur_arg[0], "-orelin") == 0) {
+      mcmini_config.use_optimal_linearization = true;
+      cur_arg += 1;
+    } else if ((strcmp(cur_arg[0], "--relinearize") == 0) ||
+               strcmp(cur_arg[0], "-relin") == 0) {
+      mcmini_config.relinearize_traces = true;
       cur_arg += 1;
     } else if (strcmp(cur_arg[0], "--from-checkpoint") == 0 ||
                strcmp(cur_arg[0], "-ckpt") == 0) {

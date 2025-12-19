@@ -14,11 +14,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 # Project configuration
 option(BUILD_TESTS OFF)
 option(VERBOSE_TESTING OFF)
+option(MCMINI_USE_SCIP OFF)
 set(MCMINI_DIR "${CMAKE_SOURCE_DIR}")
 set(MCMINI_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/include")
 set(MCMINI_CMAKE_MODULE_DIR "${CMAKE_SOURCE_DIR}/cmake")
 set(MCMINI_WITH_DMTCP OFF)
-set(MCMINI_USE_SCIP OFF)
 
 if(MCMINI_USE_SCIP)
 find_package(scip)
@@ -54,6 +54,7 @@ set(MCMINI_CPP_SRC
   src/mcmini/model/transitions/process.cpp
   src/mcmini/model/transitions/thread.cpp
   src/mcmini/model/transitions/semaphore.cpp
+  src/mcmini/model_checking/reporter.cpp
   src/mcmini/model_checking/algorithms/classic_dpor.cpp
   src/mcmini/model_checking/algorithms/clock_vector.cpp
   src/mcmini/real_world/dmtcp_process_source.cpp
