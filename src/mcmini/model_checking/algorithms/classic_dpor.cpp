@@ -969,6 +969,7 @@ classic_dpor::dpor_context::linearize_optimal() const {
   // in_degree_super[i] = in_degree[supernodes[i].front()]
   SCIP *scip = nullptr;
   SCIPcreate(&scip);
+  SCIPsetMessagehdlr(scip, NULL);
   SCIPincludeDefaultPlugins(scip);
   SCIPcreateProbBasic(scip, "Minimize_Inversions");
   SCIPsetObjsense(scip, SCIP_OBJSENSE_MINIMIZE);
