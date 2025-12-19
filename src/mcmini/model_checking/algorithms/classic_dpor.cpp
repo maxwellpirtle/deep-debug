@@ -21,6 +21,7 @@
 #include "mcmini/coordinator/coordinator.hpp"
 #include "mcmini/defines.h"
 #include "mcmini/log/logger.hpp"
+#include "mcmini/model/config.hpp"
 #include "mcmini/model/exception.hpp"
 #include "mcmini/model/program.hpp"
 #include "mcmini/model/transition.hpp"
@@ -41,7 +42,8 @@ using namespace model_checking;
 
 logger dpor_logger("dpor");
 
-struct classic_dpor::dpor_context {
+struct classic_dpor::dpor_context : public algorithm::context {
+public:
   ::coordinator &coordinator;
   std::vector<model_checking::stack_item> stack;
 
@@ -98,6 +100,9 @@ public:
   std::vector<std::vector<size_t>> transitive_reduction() const;
   std::vector<const transition *> linearize_lowest_first() const;
   std::vector<const transition *> linearize_optimal() const;
+  const program &get_model() const {
+    return this->coordinator.get_current_program_model();
+  }
 };
 
 clock_vector classic_dpor::accumulate_max_clock_vector_against(
@@ -175,11 +180,11 @@ void classic_dpor::verify_using(coordinator &coordinator,
       try {
         runner_id_t rid;
         switch (config.policy) {
-        case configuration::exploration_policy::smallest_first: {
+        case algorithm::exploration_policy::smallest_first: {
           rid = dpor_stack.back().get_first_enabled_runner();
           break;
         }
-        case configuration::exploration_policy::round_robin: {
+        case algorithm::exploration_policy::round_robin: {
           auto unscheduled_runners = dpor_stack.back().get_enabled_runners();
 
           // For round robin scheduling, always prefer to schedule
@@ -237,33 +242,29 @@ void classic_dpor::verify_using(coordinator &coordinator,
               "The program exited abnormally");
         }
       } catch (const model::undefined_behavior_exception &ube) {
-        if (callbacks.undefined_behavior)
-          callbacks.undefined_behavior(coordinator, model_checking_stats, ube);
+        callbacks.undefined_behavior(context, model_checking_stats, ube);
         return;
       } catch (const real_world::process::termination_error &te) {
-        if (callbacks.abnormal_termination)
-          callbacks.abnormal_termination(coordinator, model_checking_stats, te);
+        callbacks.abnormal_termination(context, model_checking_stats, te);
         return;
       } catch (const real_world::process::nonzero_exit_code_error &nzec) {
-        if (callbacks.nonzero_exit_code)
-          callbacks.nonzero_exit_code(coordinator, model_checking_stats, nzec);
+        callbacks.nonzero_exit_code(context, model_checking_stats, nzec);
         return;
       }
     }
 
-    if (callbacks.trace_completed)
-      callbacks.trace_completed(coordinator, model_checking_stats);
+    callbacks.trace_completed(context, model_checking_stats);
 
-    if (config.stop_at_first_deadlock &&
-        coordinator.get_current_program_model().is_in_deadlock()) {
-      log_info(dpor_logger)
-          << "First deadlock found. Reporting and stopping model checking.";
-      if (callbacks.deadlock)
-        callbacks.deadlock(coordinator, model_checking_stats);
-      return;
-    } else if (callbacks.deadlock &&
-               coordinator.get_current_program_model().is_in_deadlock())
-      callbacks.deadlock(coordinator, model_checking_stats);
+    if (coordinator.get_current_program_model().is_in_deadlock()) {
+      if (config.stop_at_first_deadlock) {
+        log_info(dpor_logger)
+            << "First deadlock found. Reporting and stopping model checking.";
+        callbacks.deadlock(context, model_checking_stats);
+        return;
+      } else {
+        callbacks.deadlock(context, model_checking_stats);
+      }
+    }
 
     // 3. Backtrack phase
     while (!dpor_stack.empty() && dpor_stack.back().backtrack_set_empty())
@@ -305,8 +306,7 @@ void classic_dpor::verify_using(coordinator &coordinator,
         // since we only account for scheduling that occurs during _expansion_.
         round_robin_sched.clear();
       } catch (const model::undefined_behavior_exception &ube) {
-        if (callbacks.undefined_behavior)
-          callbacks.undefined_behavior(coordinator, model_checking_stats, ube);
+        callbacks.undefined_behavior(context, model_checking_stats, ube);
         return;
       }
     }
