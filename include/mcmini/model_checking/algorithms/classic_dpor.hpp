@@ -35,8 +35,6 @@ public:
     config(const model::config &c)
         : maximum_total_execution_depth(c.maximum_total_execution_depth),
           stop_at_first_deadlock(c.stop_at_first_deadlock),
-          relinearize_traces(c.relinearize_traces),
-          use_optimal_linearization(c.use_optimal_linearization),
           policy(c.use_round_robin_scheduling
                      ? exploration_policy::round_robin
                      : exploration_policy::smallest_first) {}
@@ -48,8 +46,6 @@ public:
         classic_dpor::default_coenabledness();
     uint32_t maximum_total_execution_depth = 1500;
     bool stop_at_first_deadlock = false;
-    bool relinearize_traces = false;
-    bool use_optimal_linearization = false;
     bool assumes_linear_program_flow = false;
     exploration_policy policy = exploration_policy::smallest_first;
   };

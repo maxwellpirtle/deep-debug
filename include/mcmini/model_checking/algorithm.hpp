@@ -22,6 +22,9 @@ public:
     linearize_lowest_first() const = 0;
     virtual std::vector<const model::transition *>
     linearize_optimal() const = 0;
+    std::vector<const model::transition *> linearize_trace(bool optimal) const {
+      return optimal ? linearize_optimal() : linearize_lowest_first();
+    }
   };
 
   struct callbacks {

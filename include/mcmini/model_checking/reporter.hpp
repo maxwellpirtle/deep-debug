@@ -7,10 +7,19 @@ namespace model_checking {
 class reporter : public algorithm::callbacks {
 private:
   const bool verbose;
+  const bool relinearize_traces;
+  const bool use_optimal_linearization;
+
+private:
+  void dump_relinearized_trace(std::ostream &, const algorithm::context &,
+                               const stats &) const;
 
 public:
   reporter() = default;
-  reporter(const model::config &c) : verbose(c.verbose) {}
+  reporter(const model::config &c)
+      : verbose(c.verbose),
+        relinearize_traces(c.relinearize_traces || c.use_optimal_linearization),
+        use_optimal_linearization(c.use_optimal_linearization) {}
 
 public:
   // void crash(const algorithm::context &, const stats &) const override;
