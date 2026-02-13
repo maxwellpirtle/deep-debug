@@ -125,6 +125,7 @@ enum libmcmini_mode {
   PRE_DMTCP_INIT,
   PRE_CHECKPOINT_THREAD,
   CHECKPOINT_THREAD,
+  IGNORE_MODEL_CHECKER,
   RECORD,
   PRE_CHECKPOINT,
   DMTCP_RESTART_INTO_BRANCH,
@@ -156,6 +157,8 @@ extern volatile atomic_int libmcmini_mode;
 bool is_in_restart_mode(void);
 enum libmcmini_mode get_current_mode();
 void set_current_mode(enum libmcmini_mode);
+void set_ignore_model_checker(void);
+void set_capture_model_checker(void);
 
 extern pthread_t ckpt_pthread_descriptor;
 extern volatile atomic_bool libmcmini_has_recorded_checkpoint_thread;

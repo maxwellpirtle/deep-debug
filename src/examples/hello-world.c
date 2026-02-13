@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <signal.h>
 
+#include "mcmini/spy/checkpointing/record.h"
+
 int DEBUG = 0;
 
 struct forks {
@@ -17,6 +19,7 @@ struct forks {
 void *philosopher_doit(void *forks_arg) {
   struct forks *forks = forks_arg;
   sleep(4);
+  set_ignore_model_checker();
   pthread_mutex_lock(forks->left_fork);
   sleep(1);
   pthread_mutex_lock(forks->right_fork);
@@ -27,6 +30,7 @@ void *philosopher_doit(void *forks_arg) {
   pthread_mutex_unlock(forks->left_fork);
   sleep(1);
   pthread_mutex_unlock(forks->right_fork);
+  set_capture_model_checker();
   return NULL;
 }
 

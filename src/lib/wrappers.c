@@ -50,6 +50,10 @@ runner_id_t search_pthread_map(pthread_t t) {
 
 MCMINI_THREAD_LOCAL runner_id_t tid_self = RID_INVALID;
 
+runner_id_t mc_this_thread_id(void) {
+  return tid_self;
+}
+
 runner_id_t mc_register_this_thread(void) {
   static pthread_mutex_t mut = PTHREAD_MUTEX_INITIALIZER;
   static runner_id_t tid_next = 0;
@@ -112,21 +116,21 @@ void thread_block_indefinitely(void) {
 
 int mc_pthread_mutex_init(pthread_mutex_t *mutex,
                           const pthread_mutexattr_t *attr) {
-  // FIXME: Only handles NORMAL mutexes
-  if (attr != NULL) {
-    int type;
-    pthread_mutexattr_gettype(attr, &type);
-    assert(type == PTHREAD_MUTEX_NORMAL);
-  }
-
   switch (get_current_mode()) {
     case PRE_DMTCP_INIT:
     case PRE_CHECKPOINT_THREAD:
-    case CHECKPOINT_THREAD: {
+    case CHECKPOINT_THREAD:
+    case IGNORE_MODEL_CHECKER: {
       return libpthread_mutex_init(mutex, attr);
     }
     case RECORD:
     case PRE_CHECKPOINT: {
+        if (attr != NULL) {
+          int type;
+          pthread_mutexattr_gettype(attr, &type);
+          assert(type == PTHREAD_MUTEX_NORMAL);
+        }
+
       // NOTE: This is subtle: at this point, the possible modes are
       // RECORD ***AND*** DMTCP_RESTART. The latter is possible if
       // checkpointing occurs anywhere AFTER the switch statement above.
@@ -201,7 +205,8 @@ int mc_pthread_mutex_lock(pthread_mutex_t *mutex) {
   switch (get_current_mode()) {
     case PRE_DMTCP_INIT:
     case PRE_CHECKPOINT_THREAD:
-    case CHECKPOINT_THREAD: {
+    case CHECKPOINT_THREAD:
+    case IGNORE_MODEL_CHECKER: {
       return libpthread_mutex_lock(mutex);
     }
     case RECORD:
@@ -279,7 +284,8 @@ int mc_pthread_mutex_unlock(pthread_mutex_t *mutex) {
   switch (get_current_mode()) {
     case PRE_DMTCP_INIT:
     case PRE_CHECKPOINT_THREAD:
-    case CHECKPOINT_THREAD: {
+    case CHECKPOINT_THREAD:
+    case IGNORE_MODEL_CHECKER: {
       return libpthread_mutex_unlock(mutex);
     }
     case RECORD:
@@ -385,7 +391,9 @@ MCMINI_NO_RETURN void mc_transparent_exit(int status) {
       // Fallthrough
     }
     case TARGET_BRANCH:
-    case TARGET_BRANCH_AFTER_RESTART: {
+    case TARGET_BRANCH_AFTER_RESTART:
+    case IGNORE_MODEL_CHECKER: {
+      // NOTE: Ignoring the model checker shouldn't cause the process to exit.
       volatile runner_mailbox *mb = thread_get_mailbox();
       mb->type = PROCESS_EXIT_TYPE;
       memcpy_v(mb->cnts, &status, sizeof(status));
@@ -431,7 +439,8 @@ MCMINI_NO_RETURN void mc_transparent_abort(void) {
       // Explicit fallthrough
     }
     case TARGET_BRANCH:
-    case TARGET_BRANCH_AFTER_RESTART: {
+    case TARGET_BRANCH_AFTER_RESTART:
+    case IGNORE_MODEL_CHECKER: {
       volatile runner_mailbox *mb = thread_get_mailbox();
       mb->type = PROCESS_ABORT_TYPE;
       thread_wake_scheduler_and_wait();
@@ -471,7 +480,8 @@ void *mc_thread_routine_wrapper(void *arg) {
     case RECORD:
     case PRE_CHECKPOINT:
     case DMTCP_RESTART_INTO_BRANCH:
-    case DMTCP_RESTART_INTO_TEMPLATE: {
+    case DMTCP_RESTART_INTO_TEMPLATE:
+    case IGNORE_MODEL_CHECKER: {
       // If we've noticed we're executing after a `DMTCP_EVENT_RESTART`, we
       // simply let the thread continue executing until one of two things
       // happens:
@@ -534,7 +544,8 @@ void *mc_thread_routine_wrapper(void *arg) {
       break;
     }
     case TARGET_BRANCH:
-    case TARGET_BRANCH_AFTER_RESTART: {
+    case TARGET_BRANCH_AFTER_RESTART:
+    case IGNORE_MODEL_CHECKER: {
       mc_exit_thread_in_child();
       break;
     }
@@ -663,7 +674,8 @@ int mc_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
       return rc;
     }
     case TARGET_BRANCH:
-    case TARGET_BRANCH_AFTER_RESTART: {
+    case TARGET_BRANCH_AFTER_RESTART:
+    case IGNORE_MODEL_CHECKER: {
       // TODO: add support for thread attributes
       struct mc_thread_routine_arg *libmcmini_controlled_thread_arg =
           malloc(sizeof(struct mc_thread_routine_arg));
@@ -764,7 +776,8 @@ int mc_pthread_join(pthread_t t, void **rv) {
       return 0;
     }
     case TARGET_BRANCH:
-    case TARGET_BRANCH_AFTER_RESTART: {
+    case TARGET_BRANCH_AFTER_RESTART:
+    case IGNORE_MODEL_CHECKER: {
       runner_id_t rid = search_pthread_map(t);
       memcpy_v(thread_get_mailbox()->cnts, &rid, sizeof(runner_id_t));
       thread_get_mailbox()->type = THREAD_JOIN_TYPE;
@@ -775,7 +788,6 @@ int mc_pthread_join(pthread_t t, void **rv) {
       libc_abort();
     }
   }
-
 }
 
 unsigned mc_sleep(unsigned duration) {
@@ -783,7 +795,8 @@ unsigned mc_sleep(unsigned duration) {
     case TARGET_BRANCH:
     case DMTCP_RESTART_INTO_BRANCH:
     case DMTCP_RESTART_INTO_TEMPLATE:
-    case TARGET_BRANCH_AFTER_RESTART: {
+    case TARGET_BRANCH_AFTER_RESTART:
+    case IGNORE_MODEL_CHECKER: {
       // Ignore actually putting this thread to sleep:
       // it doesn't affect correctness neither for model
       // checking nor for state regenetation.
