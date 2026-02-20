@@ -171,9 +171,9 @@ enum libmcmini_mode get_current_mode() {
     if (is_checkpoint_thread()) {
       return CHECKPOINT_THREAD;
     }
-  }
-  if (atomic_load(&thread_should_ignore_transition[mc_this_thread_id()])) {
-    return IGNORE_MODEL_CHECKER;
+    if (atomic_load(&thread_should_ignore_transition[mc_this_thread_id()])) {
+      return IGNORE_MODEL_CHECKER;
+    }
   }
   return atomic_load(&libmcmini_mode);
 }

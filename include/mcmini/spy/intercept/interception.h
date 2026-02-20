@@ -25,6 +25,8 @@ int libpthread_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
                   void *(*routine)(void *), void *arg);
 int libdmtcp_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
                             void *(*routine)(void *), void *arg);
+int libtsan_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
+                            void *(*routine)(void *), void *arg);
 
 int pthread_join(pthread_t thread, void**);
 int libpthread_pthread_join(pthread_t thread, void**);

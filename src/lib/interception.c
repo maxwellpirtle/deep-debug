@@ -1,19 +1,19 @@
 #define _GNU_SOURCE
-#include "mcmini/spy/intercept/interception.h"
-
 #include <assert.h>
 #include <dlfcn.h>
 #include <dmtcp.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <errno.h>
 
+#include "mcmini/spy/intercept/interception.h"
 #include "mcmini/spy/intercept/wrappers.h"
 
 pthread_once_t libmcini_init = PTHREAD_ONCE_INIT;
 
 typeof(&pthread_create) libpthread_pthread_create_ptr;
 typeof(&pthread_create) libdmtcp_pthread_create_ptr;
+typeof(&pthread_create) libtsan_pthread_create_ptr;
 typeof(&pthread_join) libpthread_pthread_join_ptr;
 typeof(&pthread_join) libdmtcp_pthread_join_ptr;
 typeof(&pthread_mutex_init) pthread_mutex_init_ptr;
@@ -43,8 +43,7 @@ void libmcmini_init(void) {
 }
 
 void mc_load_intercepted_pthread_functions(void) {
-  void *libpthread_handle =
-      dlopen("libpthread.so", RTLD_LAZY);
+  void *libpthread_handle = dlopen("libpthread.so", RTLD_LAZY);
 
   if (!libpthread_handle) {
     libpthread_handle = dlopen("libpthread.so.0", RTLD_LAZY);
@@ -72,7 +71,8 @@ void mc_load_intercepted_pthread_functions(void) {
   pthread_mutex_init_ptr = dlsym(libpthread_handle, "pthread_mutex_init");
   pthread_mutex_lock_ptr = dlsym(libpthread_handle, "pthread_mutex_lock");
   pthread_mutex_trylock_ptr = dlsym(libpthread_handle, "pthread_mutex_trylock");
-  pthread_mutex_timedlock_ptr = dlsym(libpthread_handle, "pthread_mutex_timedlock");
+  pthread_mutex_timedlock_ptr =
+      dlsym(libpthread_handle, "pthread_mutex_timedlock");
   pthread_mutex_unlock_ptr = dlsym(libpthread_handle, "pthread_mutex_unlock");
   pthread_mutex_destroy_ptr = dlsym(libpthread_handle, "pthread_mutex_destroy");
   sem_timedwait_ptr = dlsym(libpthread_handle, "sem_timedwait");
@@ -106,6 +106,14 @@ void mc_load_intercepted_pthread_functions(void) {
     libdmtcp_pthread_create_ptr = dlsym(libdmtcp_handle, "pthread_create");
     libdmtcp_pthread_join_ptr = dlsym(libdmtcp_handle, "pthread_join");
     dlclose(libdmtcp_handle);
+  }
+
+  void *libtsan_handle = dlopen("libtsan.so.0", RTLD_LAZY);
+  if (libtsan_handle) {
+    libtsan_pthread_create_ptr = dlsym(libtsan_handle, "pthread_create");
+    dlclose(libtsan_handle);
+  } else {
+    libtsan_pthread_create_ptr = libpthread_pthread_create_ptr;
   }
 }
 
@@ -219,6 +227,12 @@ int libdmtcp_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
                             void *(*routine)(void *), void *arg) {
   libmcmini_init();
   return (*libdmtcp_pthread_create_ptr)(thread, attr, routine, arg);
+}
+
+int libtsan_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
+                           void *(*routine)(void *), void *arg) {
+  libmcmini_init();
+  return (*libtsan_pthread_create_ptr)(thread, attr, routine, arg);
 }
 
 int pthread_join(pthread_t thread, void **rv) {
