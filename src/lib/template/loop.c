@@ -1,26 +1,47 @@
+#include <assert.h>
+#include <dmtcp.h>
 #include <errno.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/prctl.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <dmtcp.h>
-#include <assert.h>
-#include <pthread.h>
-#include <signal.h>
-#include <sys/syscall.h>
 
-#include "mcmini/lib/sig.h"
 #include "mcmini/common/exit.h"
 #include "mcmini/common/shm_config.h"
 #include "mcmini/defines.h"
 #include "mcmini/lib/entry.h"
 #include "mcmini/lib/log.h"
+#include "mcmini/lib/sig.h"
 #include "mcmini/lib/template.h"
 #include "mcmini/spy/checkpointing/record.h"
 #include "mcmini/spy/intercept/interception.h"
+
+#define MAX_NAME_LEN 16
+
+void set_modified_name(const char *process_name, const char *prefix) {
+  char new_name[MAX_NAME_LEN];
+  size_t prefix_len = strlen(prefix);
+  size_t available = MAX_NAME_LEN - 1;
+
+  if (prefix_len >= available) {
+    strncpy(new_name, prefix, available);
+    new_name[available] = '\0';
+  } else {
+    size_t namePartLen = available - prefix_len;
+    strcpy(new_name, prefix);
+    strncat(new_name, process_name, namePartLen);
+    new_name[available] = '\0';
+  }
+  if (prctl(PR_SET_NAME, new_name, 0, 0, 0) != 0) {
+    perror("prctl(PR_SET_NAME)");
+  }
+}
 
 pid_t fast_multithreaded_fork(void);
 
@@ -74,45 +95,50 @@ int rt_sigqueueinfo(pid_t tgid, int sig, siginfo_t *info) {
 }
 
 void mc_template_receive_sigchld(int sig, siginfo_t *info, void *) {
-    assert(global_model_checker_pid != NO_DEFINED_MCMINI_PID);
+  assert(global_model_checker_pid != NO_DEFINED_MCMINI_PID);
+  fsync(STDOUT_FILENO);
+  int status;
+  bool signal_mcmini = false;
+  int rc = waitpid(-1, &status, 0);
+  if (rc == -1) {
+    // Error with waitpid. Signal McMini?
+    perror("waitpid");
+    return;
+  }
+  if (WIFEXITED(status)) {
+    // int exit_code = WEXITSTATUS(status);
+    // printf("exited %d", status);
+    signal_mcmini = true;
+  } else if (WIFSIGNALED(status)) {
+    int signo = WTERMSIG(status);
+    // printf("signaled %d", status);
     fsync(STDOUT_FILENO);
-    int status;
-    bool signal_mcmini = false;
-    int rc = waitpid(-1, &status, 0);
-    if (rc == -1) {
-      // Error with waitpid. Signal McMini?
-      perror("waitpid");
-      return;
-    }
-    if (WIFEXITED(status)) {
-      // int exit_code = WEXITSTATUS(status);
-      // printf("exited %d", status);
-      signal_mcmini = true;
-    }
-    else if (WIFSIGNALED(status)) {
-      int signo = WTERMSIG(status);
-      // printf("signaled %d", status);
-      fsync(STDOUT_FILENO);
-      signal_mcmini = is_bad_signal(signo);
-    }
-    if (signal_mcmini) {
-      fsync(STDOUT_FILENO);
-      // TODO: We can use `sigqueue(3)` to pass the exit status of
-      // the child to the McMini process
-      //
-      //  e.g. `sigqueue(global_model_checker_pid, SIG... ...)`
-      //
-      // Alternatively, the syscall `rt_sigqueueinfo(2)` can be used
-      // to deliver the `siginfo_t` directly.
-      //
-      // See https://man7.org/linux/man-pages/man2/rt_sigqueueinfo.2.html
-      // rt_sigqueueinfo(global_model_checker_pid, SIGCHLD, info);
-      kill(global_model_checker_pid, SIGCHLD);
-    }
-    libpthread_sem_post(&sigchld_sem);
+    signal_mcmini = is_bad_signal(signo);
+  }
+  if (signal_mcmini) {
+    fsync(STDOUT_FILENO);
+    // TODO: We can use `sigqueue(3)` to pass the exit status of
+    // the child to the McMini process
+    //
+    //  e.g. `sigqueue(global_model_checker_pid, SIG... ...)`
+    //
+    // Alternatively, the syscall `rt_sigqueueinfo(2)` can be used
+    // to deliver the `siginfo_t` directly.
+    //
+    // See https://man7.org/linux/man-pages/man2/rt_sigqueueinfo.2.html
+    // rt_sigqueueinfo(global_model_checker_pid, SIGCHLD, info);
+    kill(global_model_checker_pid, SIGCHLD);
+  }
+  libpthread_sem_post(&sigchld_sem);
 }
 
 void mc_template_process_loop_forever(pid_t (*make_new_process)(void)) {
+  char process_name[MAX_NAME_LEN];
+  if (prctl(PR_GET_NAME, process_name, 0, 0, 0) != 0) {
+    perror("prctl(PR_GET_NAME)");
+    return;
+  }
+  set_modified_name(process_name, "template:");
   volatile struct mcmini_shm_file *shm_file = global_shm_start;
   volatile struct template_process_t *tpt = &shm_file->tpt;
   const pid_t model_checker_pid = getppid();
@@ -137,13 +163,13 @@ void mc_template_process_loop_forever(pid_t (*make_new_process)(void)) {
       tpt->cpid = TEMPLATE_FORK_FAILED;
     } else if (cpid == 0) {
       // Child case: Simply return and escape into the child process
+      set_modified_name(process_name, "branch:");
       mc_prepare_new_child_process(ppid_before_fork, model_checker_pid);
       return;
     }
     // `libmcmini.so` acting as a template process.
     tpt->cpid = cpid;
     libpthread_sem_post((sem_t *)&tpt->mcmini_process_sem);
-
     log_debug("Waiting for the child `%d` to exit... \n", cpid);
     libpthread_sem_wait_loop(&sigchld_sem);
     log_debug("The child exited! Circling back... %d\n", cpid);
