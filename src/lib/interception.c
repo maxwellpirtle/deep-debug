@@ -5,12 +5,16 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <link.h> // Enables
 
 #include "mcmini/spy/intercept/interception.h"
 #include "mcmini/spy/intercept/wrappers.h"
+#include "mcmini/spy/checkpointing/record.h"
 
 pthread_once_t libmcini_init = PTHREAD_ONCE_INIT;
 
+typeof(&dl_iterate_phdr) libtsan_dl_iterate_phdr;
+typeof(&dl_iterate_phdr) libdl_dl_iterate_phdr;
 typeof(&pthread_create) libpthread_pthread_create_ptr;
 typeof(&pthread_create) libdmtcp_pthread_create_ptr;
 typeof(&pthread_create) libtsan_pthread_create_ptr;
@@ -83,9 +87,11 @@ void mc_load_intercepted_pthread_functions(void) {
   sem_destroy_ptr = dlsym(libpthread_handle, "sem_destroy");
   pthread_cond_init_ptr = dlsym(libpthread_handle, "pthread_cond_init");
   pthread_cond_wait_ptr = dlsym(libpthread_handle, "pthread_cond_wait");
-  pthread_cond_timedwait_ptr = dlsym(libpthread_handle, "pthread_cond_timedwait");
+  pthread_cond_timedwait_ptr =
+      dlsym(libpthread_handle, "pthread_cond_timedwait");
   pthread_cond_signal_ptr = dlsym(libpthread_handle, "pthread_cond_signal");
-  pthread_cond_broadcast_ptr = dlsym(libpthread_handle, "pthread_cond_broadcast");
+  pthread_cond_broadcast_ptr =
+      dlsym(libpthread_handle, "pthread_cond_broadcast");
   pthread_cond_destroy_ptr = dlsym(libpthread_handle, "pthread_cond_destroy");
   sleep_ptr = dlsym(libc_handle, "sleep");
   exit_ptr = dlsym(libc_handle, "exit");
@@ -111,11 +117,42 @@ void mc_load_intercepted_pthread_functions(void) {
   void *libtsan_handle = dlopen("libtsan.so.0", RTLD_LAZY);
   if (libtsan_handle) {
     libtsan_pthread_create_ptr = dlsym(libtsan_handle, "pthread_create");
+    libtsan_dl_iterate_phdr = dlsym(libtsan_handle, "dl_iterate_phdr");
     dlclose(libtsan_handle);
   } else {
     libtsan_pthread_create_ptr = libpthread_pthread_create_ptr;
   }
+
+  void *libdl_handle = dlopen("libdl.so.0", RTLD_LAZY);
+  if (libdl_handle) {
+    libdl_dl_iterate_phdr = dlsym(libdl_handle, "dl_iterate_phdr");
+  }
 }
+
+// int dl_iterate_phdr(int (*callback)(struct dl_phdr_info *info, size_t size, void *data), void *data) {
+//   // NOTE: `libtsan.so` inside its constructor will call and store the results of several `dlsym` calls
+//   // to interpose on different function calls for its instrumentation.
+//   // However, this causes a problem because `libdmtcp.so` interposes on `dlsym`.
+//   // Specifically, in `libdmtcp.so`'s implementation of `dlsym`, it calls
+//   // `dl_iterate_phdr`. Unfortunately, `libtsan.so` redefines this symbol. Before calling
+//   // any redefined symbols, `libtsan.so` ensures it can find the real symbol which
+//   // it initializes at start-up... you can maybe see where this is going. The problem is that
+//   // is that intialization of `dl_iterate_phdr` occurs later, but `libdmtcp.so` needs it defined right away.
+//   // Hence, we again run into the classic issue of libraries calling into each other in unexpected ways
+//   // To avoid this, `libmcmini.so` defines its own redefinition and appropriately redirects
+//   // calls to the underlying `libdl.so` library until DMTCP has been intialized. This assumes
+//   // that `libdmtcp.so` completes its own initialization _after_ `libtsan.so`
+//   libmcmini_init();
+//   switch (get_current_mode()) {
+//     case PRE_DMTCP_INIT: {
+//       break; // Default behavior
+//     }
+//     default: {
+//       if (libtsan_dl_iterate_phdr) return (*libtsan_dl_iterate_phdr)(callback, data);
+//     }
+//   }
+//   return (*libtsan_dl_iterate_phdr)(callback, data);
+// }
 
 int pthread_mutex_init(pthread_mutex_t *mutex,
                        const pthread_mutexattr_t *mutexattr) {
@@ -247,17 +284,11 @@ int libdmtcp_pthread_join(pthread_t thread, void **rv) {
   return (*libdmtcp_pthread_join_ptr)(thread, rv);
 }
 
-void exit(int status) {
-  mc_transparent_exit(status);
-}
+void exit(int status) { mc_transparent_exit(status); }
 
-void abort(void) {
-  mc_transparent_abort();
-}
+void abort(void) { mc_transparent_abort(); }
 
-unsigned sleep(unsigned duration) {
-  return mc_sleep(duration);
-}
+unsigned sleep(unsigned duration) { return mc_sleep(duration); }
 
 unsigned libc_sleep(unsigned duration) {
   libmcmini_init();
@@ -278,7 +309,7 @@ pid_t libc_fork(void) {
   return (*fork_ptr)();
 }
 
-int sem_init(sem_t*sem, int p, unsigned count) {
+int sem_init(sem_t *sem, int p, unsigned count) {
   return mc_sem_init(sem, p, count);
 }
 int sem_destroy(sem_t *sem) { return mc_sem_destroy(sem); }
@@ -290,16 +321,12 @@ int libpthread_sem_destroy(sem_t *sem) {
   libmcmini_init();
   return (*sem_destroy_ptr)(sem);
 }
-int sem_post(sem_t* sem) {
-  return mc_sem_post(sem);
-}
+int sem_post(sem_t *sem) { return mc_sem_post(sem); }
 int libpthread_sem_post(sem_t *sem) {
   libmcmini_init();
   return (*sem_post_ptr)(sem);
 }
-int sem_wait(sem_t *sem) {
-  return mc_sem_wait(sem);
-}
+int sem_wait(sem_t *sem) { return mc_sem_wait(sem); }
 int libpthread_sem_wait(sem_t *sem) {
   libmcmini_init();
   return (*sem_wait_ptr)(sem);
@@ -309,9 +336,8 @@ int libpthread_sem_timedwait(sem_t *sem, struct timespec *ts) {
   return (*sem_timedwait_ptr)(sem, ts);
 }
 int libpthread_sem_wait_loop(sem_t *sem) {
-   // retry on interruption
+  // retry on interruption
   int rc = libpthread_sem_wait(sem);
-  while (rc == -1 && errno == EINTR)
-    rc = libpthread_sem_wait(sem);
+  while (rc == -1 && errno == EINTR) rc = libpthread_sem_wait(sem);
   return rc;
 }

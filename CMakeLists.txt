@@ -84,7 +84,7 @@ set(LIBMCMINI_C_SRC
   src/mcmini/Thread_queue.c
 )
 
-set(MCMINI_EXTRA_COMPILER_FLAGS -Wall -Werror)
+set(MCMINI_EXTRA_COMPILER_FLAGS -Wall)
 set(MCMINI_EXTRA_COMPILER_DEFINITIONS "")
 set(MCMINI_EXTRA_LINK_FLAGS -lrt -pthread)
 

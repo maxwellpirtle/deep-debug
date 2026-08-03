@@ -94,7 +94,7 @@ int rt_sigqueueinfo(pid_t tgid, int sig, siginfo_t *info) {
   return syscall(SYS_rt_sigqueueinfo, tgid, sig, info);
 }
 
-void mc_template_receive_sigchld(int sig, siginfo_t *info, void *) {
+void mc_template_receive_sigchld(int sig, siginfo_t *info, void *unused) {
   assert(global_model_checker_pid != NO_DEFINED_MCMINI_PID);
   fsync(STDOUT_FILENO);
   int status;
@@ -207,9 +207,10 @@ void mc_template_thread_loop_forever(void) {
   // SIGCHLD. It's unclear if this would be useful at the time of writing.
   //
   // NOTE: We need to wait until the `SIGCHLD` is delivered before we continue
-  // execution. Although we could also use `sigwait()`, the disadvantage with using
-  // `sigwait()` is that the SA_NOCLDSTP flag has no equivalent with `sigwait()`.
-  // Instead, we rely on the fact that `sem_post(3)` is async-signal-safe
+  // execution. Although we could also use `sigwait()`, the disadvantage with
+  // using `sigwait()` is that the SA_NOCLDSTP flag has no equivalent with
+  // `sigwait()`. Instead, we rely on the fact that `sem_post(3)` is
+  // async-signal-safe
   //
   // TODO: A future optimization could be to ignore the SIGCHLD altogether in
   // the template process.
@@ -244,8 +245,7 @@ void mc_template_thread_loop_forever(void) {
       // Child case: Simply return and escape into the child process.
       mc_prepare_new_child_process(template_pid, model_checker_pid);
       return;
-    }
-    else {
+    } else {
       // Successful parent case
       log_debug("The template process created child with pid %d\n", cpid);
       tpt->cpid = cpid;

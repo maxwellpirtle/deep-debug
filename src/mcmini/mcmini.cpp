@@ -254,6 +254,7 @@ void do_recording(const config &config) {
   std::string libmcmini_path = libmcini_dir + "/libmcmini.so";
   std::vector<std::string> dmtcp_launch_args;
   dmtcp_launch_args.push_back("--disable-alloc-plugin");
+  dmtcp_launch_args.push_back("--disable-dl-plugin");
   dmtcp_launch_args.push_back("-i");
   dmtcp_launch_args.push_back(std::to_string(config.checkpoint_period.count()));
   dmtcp_launch_args.push_back("--with-plugin");

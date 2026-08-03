@@ -20,10 +20,12 @@ rec_list *current_record_mode = NULL;
 runner_id_t mc_this_thread_id(void);
 
 void set_ignore_model_checker(void) {
+  printf("ignoring model checker %u ...\n", mc_this_thread_id());
   atomic_store(&thread_should_ignore_transition[mc_this_thread_id()], true);
 }
 
 void set_capture_model_checker(void) {
+  printf("obeying model checker %u ...\n", mc_this_thread_id());
   atomic_store(&thread_should_ignore_transition[mc_this_thread_id()], false);
 }
 
@@ -171,6 +173,8 @@ enum libmcmini_mode get_current_mode() {
     if (is_checkpoint_thread()) {
       return CHECKPOINT_THREAD;
     }
+    // Ignoring the model checker should only be possible
+    // once the checkpoint thread is loaded
     if (atomic_load(&thread_should_ignore_transition[mc_this_thread_id()])) {
       return IGNORE_MODEL_CHECKER;
     }

@@ -4,9 +4,9 @@ import subprocess as sp
 
 try:
     pids = sp.check_output(["pgrep", "DMTCP"], text=True).strip().split("\n")
-except subprocess.CalledProcessError:
+except sp.CalledProcessError:
     # No processes found
-    print("No processes matching 'foo' were found.")
+    print("No processes matching 'DMTCP:' were found.")
     exit(1)
 
 # Loop through each PID and open a new GNOME terminal with gdb attached

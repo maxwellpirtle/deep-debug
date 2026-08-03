@@ -26,7 +26,7 @@ static pthread_map_t *head = NULL;
 
 void insert_pthread_map(pthread_t t, runner_id_t v) {
     pthread_rwlock_wrlock(&pthread_map_lock);
-    pthread_map_t *n = malloc(sizeof *n);
+    pthread_map_t *n = malloc(sizeof(pthread_map_t));
     n->thread = t;
     n->value = v;
     n->next = head;
@@ -691,6 +691,7 @@ int mc_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
       // inform DMTCP of these new threads. Indeed, in classic model checking
       // mode, `libdmtcp.so` is not even loaded (so we'd have to check first anyway).
       // Calling `libpthread_pthread_create` simplifies all this.
+      //
       const int rv =
           libpthread_pthread_create(thread, attr, &mc_thread_routine_wrapper,
                                     libmcmini_controlled_thread_arg);
@@ -811,7 +812,8 @@ int mc_pthread_cond_init(pthread_cond_t *cond,
                          const pthread_condattr_t *attr) {
   switch (get_current_mode()) {
     case PRE_DMTCP_INIT:
-    case PRE_CHECKPOINT_THREAD: {
+    case PRE_CHECKPOINT_THREAD:
+    case IGNORE_MODEL_CHECKER: {
       return libpthread_cond_init(cond, attr);
     }
     case RECORD:
@@ -870,7 +872,8 @@ int mc_pthread_cond_init(pthread_cond_t *cond,
 int mc_pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
   switch (get_current_mode()){
     case PRE_DMTCP_INIT:
-    case PRE_CHECKPOINT_THREAD: {
+    case PRE_CHECKPOINT_THREAD:
+    case IGNORE_MODEL_CHECKER: {
       return libpthread_cond_wait(cond, mutex);
     }
     case RECORD:
@@ -1009,7 +1012,8 @@ int mc_pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
 int mc_pthread_cond_signal(pthread_cond_t *cond) {
   switch (get_current_mode()) {
     case PRE_DMTCP_INIT:
-    case PRE_CHECKPOINT_THREAD: {
+    case PRE_CHECKPOINT_THREAD:
+    case IGNORE_MODEL_CHECKER: {
       return libpthread_cond_signal(cond);
     }
     case RECORD:
@@ -1098,7 +1102,8 @@ int mc_pthread_cond_signal(pthread_cond_t *cond) {
 int mc_pthread_cond_broadcast(pthread_cond_t *cond) {
   switch (get_current_mode()) {
     case PRE_DMTCP_INIT:
-    case PRE_CHECKPOINT_THREAD: {
+    case PRE_CHECKPOINT_THREAD:
+    case IGNORE_MODEL_CHECKER: {
       return libpthread_cond_broadcast(cond);
     }
     case RECORD:
@@ -1155,7 +1160,8 @@ int mc_pthread_cond_broadcast(pthread_cond_t *cond) {
 int mc_pthread_cond_destroy(pthread_cond_t *cond) {
   switch (get_current_mode()) {
     case PRE_DMTCP_INIT:
-    case PRE_CHECKPOINT_THREAD: {
+    case PRE_CHECKPOINT_THREAD:
+    case IGNORE_MODEL_CHECKER: {
       return libpthread_cond_destroy(cond);
     }
     case RECORD:

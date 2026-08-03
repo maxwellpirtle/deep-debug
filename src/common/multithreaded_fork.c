@@ -191,7 +191,7 @@ static pid_t patchThreadDescriptor(pthread_t pthreadSelf) {
   return oldtid;
 }
 
-void restart_child_threads();
+void restart_child_threads(int);
 void multithreaded_fork_child_handler(int sig);
 
 #define SIG_MULTITHREADED_FORK (SIGRTMIN+6)
