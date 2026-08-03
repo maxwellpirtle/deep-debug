@@ -176,9 +176,8 @@ void do_model_checking_from_dmtcp_ckpt_file(const config &config) {
               });
 
     for (const ::visible_object &recorded_thread : recorded_threads) {
-      recorder.observe_runner(
-          (void *)recorded_thread.thrd_state.pthread_desc,
-          translate_recorded_runner_to_model(recorded_thread));
+      recorder.observe_runner(recorded_thread.thrd_state.id,
+                              translate_recorded_runner_to_model(recorded_thread));
     }
 
     for (const ::visible_object &recorded_thread : recorded_threads) {
