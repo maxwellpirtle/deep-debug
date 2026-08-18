@@ -39,20 +39,48 @@ extern "C" {
 #define MCMINI_PRIMITIVE_NOT_STATIC_INIT ((uint8_t)0)
 
 /**
- * Report whether `m` is byte-equal to PTHREAD_MUTEX_INITIALIZER.
+ * Report whether `m` is byte-equal to a glibc static mutex initializer.
  *
- * Equality is full-`sizeof` byte equality against a prototype with static
- * storage duration (D-05): every byte of the prototype, padding included,
- * is zero-initialized, so the comparison is deterministic on glibc. The
- * primitive is ordinary in-process memory, so a plain memcmp is correct
- * here; only mailbox bytes are volatile.
+ * Equality is full-`sizeof` byte equality against prototypes with static
+ * storage duration (D-05): every byte of each prototype, padding included,
+ * is zero-initialized (or constant-initialized), so the comparison is
+ * deterministic on glibc. The primitive is ordinary in-process memory, so a
+ * plain memcmp is correct here; only mailbox bytes are volatile.
+ *
+ * All three glibc static initializers are recognized (WR-01):
+ * `PTHREAD_MUTEX_INITIALIZER`, and -- where the libc exposes them --
+ * `PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP` and
+ * `PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP`. All three are legal static
+ * initialization; a first operation on any of them must NOT be reported as
+ * acting on an uninitialized mutex. (The model still treats the primitive
+ * as a normal mutex after registration -- the same simplification as the
+ * "FIXME: We assume that this is a normal mutex" record path in
+ * wrappers.c.) The `_NP` prototypes are compile-time gated: glibc only
+ * defines those macros under `__USE_GNU` (`_GNU_SOURCE`); a build without
+ * them falls back to default-initializer-only recognition.
  */
 static inline uint8_t mcmini_mutex_is_static_initializer(
     const pthread_mutex_t *m) {
-  static const pthread_mutex_t proto = PTHREAD_MUTEX_INITIALIZER;
-  return memcmp(m, &proto, sizeof(pthread_mutex_t)) == 0
-             ? MCMINI_PRIMITIVE_STATIC_INIT
-             : MCMINI_PRIMITIVE_NOT_STATIC_INIT;
+  static const pthread_mutex_t proto_default = PTHREAD_MUTEX_INITIALIZER;
+  if (memcmp(m, &proto_default, sizeof(pthread_mutex_t)) == 0)
+    return MCMINI_PRIMITIVE_STATIC_INIT;
+#ifdef PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP
+  {
+    static const pthread_mutex_t proto_recursive =
+        PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+    if (memcmp(m, &proto_recursive, sizeof(pthread_mutex_t)) == 0)
+      return MCMINI_PRIMITIVE_STATIC_INIT;
+  }
+#endif
+#ifdef PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP
+  {
+    static const pthread_mutex_t proto_errorcheck =
+        PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
+    if (memcmp(m, &proto_errorcheck, sizeof(pthread_mutex_t)) == 0)
+      return MCMINI_PRIMITIVE_STATIC_INIT;
+  }
+#endif
+  return MCMINI_PRIMITIVE_NOT_STATIC_INIT;
 }
 
 /** Report whether `c` is byte-equal to PTHREAD_COND_INITIALIZER. */
