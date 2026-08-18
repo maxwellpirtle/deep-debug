@@ -52,10 +52,21 @@ model::transition *mutex_unlock_callback(runner_id_t p,
   memcpy_v(&remote_mut, (volatile void *)rmb.cnts, sizeof(pthread_mutex_t *));
   const uint8_t static_init_flag = mcmini_payload_read_flag(rmb.cnts, 1, 0);
 
-  transitions::ensure_primitive_initialized(
-      m, remote_mut, static_init_flag,
-      []() { return new mutex(mutex::unlocked); },
-      "Attempting to unlock an uninitialized mutex");
+  // WR-02: an unlock can never legally be a mutex's FIRST observed
+  // operation. Registering the mutex as freshly-unlocked here would make
+  // `mutex_unlock::modify` return `disabled` forever (the executor cannot
+  // hold a freshly-registered unlocked mutex), which the model would
+  // misreport as a deadlock. Both first-op-unlock cases are UB (or, for an
+  // error-checking mutex, a legal EPERM the model does not yet
+  // distinguish), so report them with operation-accurate messages instead
+  // of registering a never-enabled transition.
+  if (!m.contains(remote_mut)) {
+    if (static_init_flag != MCMINI_PRIMITIVE_STATIC_INIT)
+      throw undefined_behavior_exception(
+          "Attempting to unlock an uninitialized mutex");
+    throw undefined_behavior_exception(
+        "Attempting to unlock a mutex the calling thread does not hold");
+  }
 
   state::objid_t const mut = m.get_model_of_object(remote_mut);
   return new transitions::mutex_unlock(p, mut);
