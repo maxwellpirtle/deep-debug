@@ -14,6 +14,7 @@
 #include "mcmini/common/exit.h"
 #include "mcmini/Thread_queue.h"
 #include "mcmini/mcmini.h"
+#include "mcmini/real_world/mailbox/mailbox_payload.h"
 
 typedef struct pthread_map {
     pthread_t thread;
@@ -262,6 +263,8 @@ int mc_pthread_mutex_lock(pthread_mutex_t *mutex) {
       volatile runner_mailbox *mb = thread_get_mailbox();
       mb->type = MUTEX_LOCK_TYPE;
       memcpy_v(mb->cnts, &mutex, sizeof(mutex));
+      uint8_t mutex_flag = mcmini_mutex_is_static_initializer(mutex);
+      mcmini_payload_write_flag(mb->cnts, 1, 0, mutex_flag);
       thread_handle_after_dmtcp_restart();
       return libpthread_mutex_lock(mutex);
     }
@@ -270,6 +273,8 @@ int mc_pthread_mutex_lock(pthread_mutex_t *mutex) {
       volatile runner_mailbox *mb = thread_get_mailbox();
       mb->type = MUTEX_LOCK_TYPE;
       memcpy_v(mb->cnts, &mutex, sizeof(mutex));
+      uint8_t mutex_flag = mcmini_mutex_is_static_initializer(mutex);
+      mcmini_payload_write_flag(mb->cnts, 1, 0, mutex_flag);
       thread_wake_scheduler_and_wait();
       return libpthread_mutex_lock(mutex);
     }
@@ -319,6 +324,8 @@ int mc_pthread_mutex_unlock(pthread_mutex_t *mutex) {
       volatile runner_mailbox *mb = thread_get_mailbox();
       mb->type = MUTEX_UNLOCK_TYPE;
       memcpy_v(mb->cnts, &mutex, sizeof(mutex));
+      uint8_t mutex_flag = mcmini_mutex_is_static_initializer(mutex);
+      mcmini_payload_write_flag(mb->cnts, 1, 0, mutex_flag);
       thread_handle_after_dmtcp_restart();
       return libpthread_mutex_unlock(mutex);
     }
@@ -327,6 +334,8 @@ int mc_pthread_mutex_unlock(pthread_mutex_t *mutex) {
       volatile runner_mailbox *mb = thread_get_mailbox();
       mb->type = MUTEX_UNLOCK_TYPE;
       memcpy_v(mb->cnts, &mutex, sizeof(mutex));
+      uint8_t mutex_flag = mcmini_mutex_is_static_initializer(mutex);
+      mcmini_payload_write_flag(mb->cnts, 1, 0, mutex_flag);
       thread_wake_scheduler_and_wait();
       return libpthread_mutex_unlock(mutex);
     }
@@ -998,11 +1007,19 @@ int mc_pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
       mb->type = COND_ENQUEUE_TYPE;
       memcpy_v(mb->cnts, &cond, sizeof(cond));
       memcpy_v(mb->cnts + sizeof(cond), &mutex, sizeof(mutex));
+      uint8_t cond_flag = mcmini_cond_is_static_initializer(cond);
+      uint8_t mutex_flag = mcmini_mutex_is_static_initializer(mutex);
+      mcmini_payload_write_flag(mb->cnts, 2, 0, cond_flag);
+      mcmini_payload_write_flag(mb->cnts, 2, 1, mutex_flag);
       thread_handle_after_dmtcp_restart();
       libpthread_mutex_unlock(mutex);
       mb->type = COND_WAIT_TYPE;
       memcpy_v(mb->cnts, &cond, sizeof(cond));
       memcpy_v(mb->cnts + sizeof(cond), &mutex, sizeof(mutex));
+      cond_flag = mcmini_cond_is_static_initializer(cond);
+      mutex_flag = mcmini_mutex_is_static_initializer(mutex);
+      mcmini_payload_write_flag(mb->cnts, 2, 0, cond_flag);
+      mcmini_payload_write_flag(mb->cnts, 2, 1, mutex_flag);
       thread_handle_after_dmtcp_restart();
       libpthread_mutex_lock(mutex);
       return 0;
@@ -1013,11 +1030,19 @@ int mc_pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
       mb->type = COND_ENQUEUE_TYPE;
       memcpy_v(mb->cnts, &cond, sizeof(cond));
       memcpy_v(mb->cnts + sizeof(cond), &mutex, sizeof(mutex));
+      uint8_t cond_flag = mcmini_cond_is_static_initializer(cond);
+      uint8_t mutex_flag = mcmini_mutex_is_static_initializer(mutex);
+      mcmini_payload_write_flag(mb->cnts, 2, 0, cond_flag);
+      mcmini_payload_write_flag(mb->cnts, 2, 1, mutex_flag);
       thread_wake_scheduler_and_wait();
       libpthread_mutex_unlock(mutex);
       mb->type = COND_WAIT_TYPE;
       memcpy_v(mb->cnts, &cond, sizeof(cond));
       memcpy_v(mb->cnts + sizeof(cond), &mutex, sizeof(mutex));
+      cond_flag = mcmini_cond_is_static_initializer(cond);
+      mutex_flag = mcmini_mutex_is_static_initializer(mutex);
+      mcmini_payload_write_flag(mb->cnts, 2, 0, cond_flag);
+      mcmini_payload_write_flag(mb->cnts, 2, 1, mutex_flag);
       thread_wake_scheduler_and_wait();
       libpthread_mutex_lock(mutex);
       return 0;
@@ -1099,6 +1124,8 @@ int mc_pthread_cond_signal(pthread_cond_t *cond) {
       volatile runner_mailbox *mb = thread_get_mailbox();
       mb->type = COND_SIGNAL_TYPE;
       memcpy_v(mb->cnts, &cond, sizeof(cond));
+      uint8_t cond_flag = mcmini_cond_is_static_initializer(cond);
+      mcmini_payload_write_flag(mb->cnts, 1, 0, cond_flag);
       // notify_template_thread();
       // thread_await_scheduler();
       thread_handle_after_dmtcp_restart();
@@ -1109,6 +1136,8 @@ int mc_pthread_cond_signal(pthread_cond_t *cond) {
       volatile runner_mailbox *mb = thread_get_mailbox();
       mb->type = COND_SIGNAL_TYPE;
       memcpy_v(mb->cnts, &cond, sizeof(cond));
+      uint8_t cond_flag = mcmini_cond_is_static_initializer(cond);
+      mcmini_payload_write_flag(mb->cnts, 1, 0, cond_flag);
       thread_wake_scheduler_and_wait();
       return libpthread_cond_signal(cond);
     }
@@ -1164,6 +1193,8 @@ int mc_pthread_cond_broadcast(pthread_cond_t *cond) {
       volatile runner_mailbox *mb = thread_get_mailbox();
       mb->type = COND_BROADCAST_TYPE;
       memcpy_v(mb->cnts, &cond, sizeof(cond));
+      uint8_t cond_flag = mcmini_cond_is_static_initializer(cond);
+      mcmini_payload_write_flag(mb->cnts, 1, 0, cond_flag);
       thread_handle_after_dmtcp_restart();
       return libpthread_cond_broadcast(cond);
     }
@@ -1172,6 +1203,8 @@ int mc_pthread_cond_broadcast(pthread_cond_t *cond) {
       volatile runner_mailbox *mb = thread_get_mailbox();
       mb->type = COND_BROADCAST_TYPE;
       memcpy_v(mb->cnts, &cond, sizeof(cond));
+      uint8_t cond_flag = mcmini_cond_is_static_initializer(cond);
+      mcmini_payload_write_flag(mb->cnts, 1, 0, cond_flag);
       thread_wake_scheduler_and_wait();
       return libpthread_cond_broadcast(cond);
     }
@@ -1223,6 +1256,8 @@ int mc_pthread_cond_destroy(pthread_cond_t *cond) {
       volatile runner_mailbox *mb = thread_get_mailbox();
       mb->type = COND_DESTROY_TYPE;
       memcpy_v(mb->cnts, &cond, sizeof(cond));
+      uint8_t cond_flag = mcmini_cond_is_static_initializer(cond);
+      mcmini_payload_write_flag(mb->cnts, 1, 0, cond_flag);
       thread_handle_after_dmtcp_restart();
       return libpthread_cond_destroy(cond);
     }
@@ -1231,6 +1266,8 @@ int mc_pthread_cond_destroy(pthread_cond_t *cond) {
       volatile runner_mailbox *mb = thread_get_mailbox();
       mb->type = COND_DESTROY_TYPE;
       memcpy_v(mb->cnts, &cond, sizeof(cond));
+      uint8_t cond_flag = mcmini_cond_is_static_initializer(cond);
+      mcmini_payload_write_flag(mb->cnts, 1, 0, cond_flag);
       thread_wake_scheduler_and_wait();
       return libpthread_cond_destroy(cond);
     }
