@@ -244,8 +244,21 @@ if [ "$subcommand" != compare ]; then
 fi
 
 tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
-trap 'rm -rf "$tmpdir"; exit 130' INT TERM
+
+# Set while an --out capture is in flight and cleared once the result has been
+# renamed into place, so that the one cleanup path removes a partial capture
+# without ever touching a completed one.
+out_tmp=""
+
+cleanup() {
+  rm -rf "$tmpdir"
+  if [ -n "$out_tmp" ]; then
+    rm -f "$out_tmp"
+  fi
+}
+
+trap 'cleanup' EXIT
+trap 'cleanup; exit 130' INT TERM
 
 stat_value() {
   sed -n "s/^$1=//p" "$2"
@@ -416,7 +429,15 @@ run_suite() {
 
 run_command() {
   if [ -n "$out_path" ]; then
-    run_suite > "$out_path"
+    # A capture takes minutes, and its target may be the checked-in baseline —
+    # the milestone's only pre-optimization record. Redirecting straight at it
+    # would truncate it at t=0, so an interrupted re-capture would destroy the
+    # very file it was meant to replace. The temporary sits beside the target so
+    # the rename is same-filesystem, and therefore atomic.
+    out_tmp="$out_path.partial.$$"
+    run_suite > "$out_tmp"
+    mv -- "$out_tmp" "$out_path"
+    out_tmp=""
   else
     run_suite
   fi

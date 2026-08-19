@@ -75,7 +75,11 @@ private:
   clock_vector accumulate_max_clock_vector_against(const model::transition &,
                                                    const dpor_context &) const;
 
-  void continue_dpor_by_expanding_trace_with(runner_id_t p, dpor_context &);
+  // The single point at which a transition is executed, and hence the single
+  // point at which one is counted: both the exploration phase and the
+  // backtrack phase reach the process through here.
+  void continue_dpor_by_expanding_trace_with(runner_id_t p, dpor_context &,
+                                             stats &);
   void grow_stack_after_running(dpor_context &);
   void dynamically_update_backtrack_sets(dpor_context &);
 

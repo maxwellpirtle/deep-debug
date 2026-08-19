@@ -223,8 +223,8 @@ stats classic_dpor::verify_using(coordinator &coordinator,
           }
         }
 
-        this->continue_dpor_by_expanding_trace_with(rid, context);
-        model_checking_stats.total_transitions++;
+        this->continue_dpor_by_expanding_trace_with(rid, context,
+                                                    model_checking_stats);
 
         // Now ask the question: will the next operation of this thread
         // cause the program to exit or abort abnormally?
@@ -295,7 +295,8 @@ stats classic_dpor::verify_using(coordinator &coordinator,
       // follow it before continuing onto the exploration phase.
       try {
         this->continue_dpor_by_expanding_trace_with(
-            dpor_stack.back().backtrack_set_pop_first(), context);
+            dpor_stack.back().backtrack_set_pop_first(), context,
+            model_checking_stats);
 
         // If we're doing round robin scheduling for expanding the trace,
         // backtracking forces a restart of the round robin process.
@@ -325,9 +326,10 @@ stats classic_dpor::verify_using(coordinator &coordinator,
 }
 
 void classic_dpor::continue_dpor_by_expanding_trace_with(
-    runner_id_t p, dpor_context &context) {
+    runner_id_t p, dpor_context &context, stats &statistics) {
   log_debug(dpor_logger) << "DPOR selected `" << p << "` to explore";
   context.coordinator.execute_runner(p);
+  statistics.total_transitions++;
   log_debug(dpor_logger) << "DPOR expanded following `" << p << "`";
   this->grow_stack_after_running(context);
   this->dynamically_update_backtrack_sets(context);
