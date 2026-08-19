@@ -1,0 +1,18 @@
+# mcmini-bench-baseline v1
+# commit=7be046283b124500d3ecf4a42be60679603d2d42
+# build_type=Release
+# compiler=cc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+# cpu=aarch64 ARM (implementer 0x41, part 0x000), 2 cores
+# threads=3
+# repeats=5
+# timeout_seconds=120
+# captured=2026-08-12T19:10:55Z
+program	threads	traces	transitions	violation_kinds	violation_counts	exhausted	max_depth_per_thread	max_depth_per_trace	transition_ceiling	elapsed_ms	check_ms	status
+mutex-bug	3	2756	25385	deadlock	deadlock:5	yes	1500	1500	1500	2420	2418	ok
+mutex-clean	3	1603	15984	-	-	yes	1500	1500	1500	1404	1403	ok
+sem-bug	3	161	1186	deadlock	deadlock:85	yes	1500	1500	1500	132	130	ok
+sem-clean	3	23	509	-	-	yes	1500	1500	1500	24	23	ok
+cv-bug	3	168	793	deadlock	deadlock:168	yes	1500	1500	1500	118	115	ok
+cv-clean	3	136	1483	-	-	yes	1500	1500	1500	119	117	ok
+mixed-bug	3	25321	243991	deadlock	deadlock:217	yes	1500	1500	1500	26242	26240	ok
+mixed-clean	3	33940	326297	-	-	yes	1500	1500	1500	35557	35555	ok
