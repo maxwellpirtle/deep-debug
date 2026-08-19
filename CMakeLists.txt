@@ -12,7 +12,7 @@ set(CMAKE_C_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 
 # Project configuration
-option(BUILD_TESTS OFF)
+option(BUILD_TESTS "Build the unit tests" ON)
 option(VERBOSE_TESTING OFF)
 option(MCMINI_USE_SCIP OFF)
 set(MCMINI_DIR "${CMAKE_SOURCE_DIR}")
@@ -65,6 +65,12 @@ set(MCMINI_CPP_SRC
   src/mcmini/real_world/shm.cpp
   src/mcmini/real_world/target.cpp
 )
+
+# The model checker's sources minus its `main()`. A test executable brings its
+# own entry point, so it links these objects rather than `MCMINI_CPP_SRC`.
+set(MCMINI_CORE_CPP_SRC ${MCMINI_CPP_SRC})
+list(REMOVE_ITEM MCMINI_CORE_CPP_SRC src/mcmini/mcmini.cpp)
+
 set(LIBMCMINI_C_SRC
   src/common/exit.c
   src/common/mem.c
@@ -124,7 +130,20 @@ target_link_libraries(libmcmini
   PUBLIC
     "${LIBMCMINI_EXTRA_LINK_FLAGS}")
 
-add_executable(mcmini "${MCMINI_CPP_SRC}" "${MCMINI_C_SRC}")
+# Everything the model checker is, minus the entry point, compiled once and
+# consumed by both `mcmini` and the test executables. `$<TARGET_OBJECTS:...>` is
+# used at the consumer rather than `target_link_libraries` against an OBJECT
+# library, which is a CMake 3.12 feature this project's 3.10 minimum predates.
+add_library(mcmini_core OBJECT "${MCMINI_CORE_CPP_SRC}" "${MCMINI_C_SRC}")
+target_include_directories(mcmini_core PUBLIC "${MCMINI_INCLUDE_DIR}")
+target_compile_definitions(mcmini_core
+  PUBLIC
+    "${MCMINI_EXTRA_COMPILER_DEFINITIONS}")
+target_compile_options(mcmini_core
+  PRIVATE
+    "${MCMINI_EXTRA_COMPILER_FLAGS}")
+
+add_executable(mcmini src/mcmini/mcmini.cpp $<TARGET_OBJECTS:mcmini_core>)
 target_include_directories(mcmini PUBLIC "${MCMINI_INCLUDE_DIR}")
 target_compile_definitions(mcmini
   PUBLIC
@@ -138,8 +157,14 @@ target_link_libraries(mcmini
 if (MCMINI_USE_SCIP)
 target_link_libraries(mcmini PUBLIC scip)
 target_compile_definitions(mcmini PUBLIC MCMINI_USE_SCIP)
+# `classic_dpor.cpp` lives in `mcmini_core`, so the SCIP-guarded code is
+# compiled there and needs the definition and SCIP's headers.
+target_link_libraries(mcmini_core PUBLIC scip)
+target_compile_definitions(mcmini_core PUBLIC MCMINI_USE_SCIP)
 endif()
 
 add_subdirectory(bench)
 add_subdirectory(src/examples)
+
+enable_testing()
 add_subdirectory(test)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mcmini/misc/ddt.hpp"
+#include "mcmini/model/config.hpp"
 #include "mcmini/model_checking/algorithm.hpp"
 #include "mcmini/model_checking/algorithms/classic_dpor/runner_item.hpp"
 #include "mcmini/model_checking/algorithms/classic_dpor/stack_item.hpp"

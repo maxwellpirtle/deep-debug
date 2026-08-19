@@ -30,6 +30,8 @@
 #include "mcmini/model/transitions/condition_variables/callbacks.hpp"
 #include "mcmini/model/transitions/mutex/callbacks.hpp"
 #include "mcmini/model/transitions/mutex/mutex_init.hpp"
+#include "mcmini/model/transitions/process/abort.hpp"
+#include "mcmini/model/transitions/process/exit.hpp"
 #include "mcmini/model/transitions/semaphore/callbacks.hpp"
 #include "mcmini/model/transitions/thread/callbacks.hpp"
 #include "mcmini/model_checking/algorithms/classic_dpor.hpp"
@@ -499,7 +501,6 @@ bool classic_dpor::dynamically_update_backtrack_sets_at_index(
     const dpor_context &context, const model::transition &S_i,
     const model::transition &next_sp, stack_item &pre_si, size_t i,
     runner_id_t p) {
-  // TODO: add in co-enabled conditions
   const bool has_reversible_race = this->are_dependent(next_sp, S_i) &&
                                    this->are_coenabled(next_sp, S_i) &&
                                    !context.happens_before_thread(i, p);
@@ -537,6 +538,24 @@ bool classic_dpor::dynamically_update_backtrack_sets_at_index(
   return has_reversible_race;
 }
 
+namespace {
+
+/// @brief Names a transition-type pair that no registered relation answers.
+///
+/// Not a hard failure: an unanswered pair costs reduction, never correctness.
+/// It is reported so the gap is a work item rather than a silent one. The
+/// table itself reports each unordered pair once per run.
+classic_dpor::dependency_relation_type::unregistered_pair_observer
+unregistered_pair_alarm(const char *relation) {
+  return [relation](const std::type_info &t1, const std::type_info &t2) {
+    log_unexpected(dpor_logger)
+        << "no " << relation << " relation answers (" << t1.name() << ", "
+        << t2.name() << "): falling back to the conservative answer";
+  };
+}
+
+}  // namespace
+
 classic_dpor::dependency_relation_type classic_dpor::default_dependencies() {
   classic_dpor::dependency_relation_type dr;
   using namespace transitions;
@@ -544,6 +563,8 @@ classic_dpor::dependency_relation_type classic_dpor::default_dependencies() {
   dr.register_dd_entry<const thread_join>(&thread_join::depends);
   dr.register_dd_entry<const thread_start>(&thread_start::depends);
   dr.register_dd_entry<const thread_exit>(&thread_exit::depends);
+  dr.register_dd_entry<const process_exit>(&process_exit::depends);
+  dr.register_dd_entry<const process_abort>(&process_abort::depends);
   dr.register_dd_entry<const mutex_lock, const mutex_init>(
       &mutex_lock::depends);
   dr.register_dd_entry<const mutex_lock, const mutex_lock>(
@@ -558,14 +579,54 @@ classic_dpor::dependency_relation_type classic_dpor::default_dependencies() {
       &condition_variable_signal::depends);
   dr.register_dd_entry<const condition_variable_signal, const mutex_lock>(
       &condition_variable_signal::depends);
+
+  // `condition_variable_wait` and `condition_variable_enqueue_thread` are the
+  // only non-mutex transitions whose `modify` reads and writes a mutex: each
+  // is disabled by that mutex's state and each changes it, so under
+  // Flanagan-Godefroid Definition 1 both are dependent with every operation on
+  // the same mutex. These pairs are written out by hand because a mutex-family
+  // catch-all would answer "not a mutex operation, therefore independent",
+  // which for these two is unsound.
+  dr.register_dd_entry<const condition_variable_wait, const mutex_unlock>(
+      &condition_variable_wait::depends);
+  dr.register_dd_entry<const condition_variable_wait, const mutex_init>(
+      &condition_variable_wait::depends);
+  dr.register_dd_entry<const condition_variable_enqueue_thread,
+                       const mutex_lock>(
+      &condition_variable_enqueue_thread::depends);
+  dr.register_dd_entry<const condition_variable_enqueue_thread,
+                       const mutex_unlock>(
+      &condition_variable_enqueue_thread::depends);
+  dr.register_dd_entry<const condition_variable_enqueue_thread,
+                       const mutex_init>(
+      &condition_variable_enqueue_thread::depends);
+
+  dr.register_dd_entry<const condition_variable_broadcast,
+                       const condition_variable_wait>(
+      &condition_variable_broadcast::depends);
+  dr.register_dd_entry<const condition_variable_broadcast,
+                       const condition_variable_signal>(
+      &condition_variable_broadcast::depends);
+  dr.register_dd_entry<const condition_variable_broadcast,
+                       const condition_variable_destroy>(
+      &condition_variable_broadcast::depends);
+  dr.register_dd_entry<const condition_variable_destroy,
+                       const condition_variable_wait>(
+      &condition_variable_destroy::depends);
+  dr.register_dd_entry<const condition_variable_destroy,
+                       const condition_variable_signal>(
+      &condition_variable_destroy::depends);
+  dr.set_unregistered_pair_observer(unregistered_pair_alarm("dependence"));
   return dr;
 }
 
 classic_dpor::coenabled_relation_type classic_dpor::default_coenabledness() {
   using namespace transitions;
-  classic_dpor::dependency_relation_type cr;
+  classic_dpor::coenabled_relation_type cr;
   cr.register_dd_entry<const thread_create>(&thread_create::coenabled_with);
   cr.register_dd_entry<const thread_join>(&thread_join::coenabled_with);
+  cr.register_dd_entry<const process_exit>(&process_exit::coenabled_with);
+  cr.register_dd_entry<const process_abort>(&process_abort::coenabled_with);
   cr.register_dd_entry<const mutex_lock, const mutex_unlock>(
       &mutex_lock::coenabled_with);
   cr.register_dd_entry<const condition_variable_signal,
@@ -584,6 +645,22 @@ classic_dpor::coenabled_relation_type classic_dpor::default_coenabledness() {
   cr.register_dd_entry<const condition_variable_destroy,
                        const condition_variable_signal>(
       &condition_variable_destroy::coenabled_with);
+  cr.register_dd_entry<const condition_variable_broadcast,
+                       const condition_variable_destroy>(
+      &condition_variable_broadcast::coenabled_with);
+
+  // Enqueueing requires the mutex locked by the enqueueing thread, while a
+  // lock requires it unlocked and an unlock requires it held by the unlocking
+  // thread. `are_coenabled` only consults this table for transitions with
+  // *different* executors, and two threads cannot both hold one mutex, so on
+  // the same mutex these can never both be enabled.
+  cr.register_dd_entry<const condition_variable_enqueue_thread,
+                       const mutex_lock>(
+      &condition_variable_enqueue_thread::coenabled_with);
+  cr.register_dd_entry<const condition_variable_enqueue_thread,
+                       const mutex_unlock>(
+      &condition_variable_enqueue_thread::coenabled_with);
+  cr.set_unregistered_pair_observer(unregistered_pair_alarm("co-enabledness"));
   return cr;
 }
 

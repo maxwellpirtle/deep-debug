@@ -1,11 +1,15 @@
 #pragma once
 
+#include <functional>
+#include <memory>
+#include <set>
 #include <stdexcept>
 #include <tuple>
 #include <type_traits>
 #include <typeindex>
 #include <typeinfo>
 #include <unordered_map>
+#include <utility>
 
 template <typename Source, typename Target>
 struct copy_cv {
@@ -48,6 +52,26 @@ struct double_dispatch_member_function_table<InterfaceType,
   std::unordered_map<std::type_index,
                      std::pair<stored_callback, opaque_callback>>
       interface_member_function_table;
+
+  using type_pair = std::pair<std::type_index, std::type_index>;
+
+  std::function<void(const std::type_info &, const std::type_info &)>
+      on_unregistered_pair;
+
+  // Shared rather than owned so that every copy of this table reports a given
+  // pair once *between them*: the tables are held by value and copied.
+  std::shared_ptr<std::set<type_pair>> reported_pairs =
+      std::make_shared<std::set<type_pair>>();
+
+  /// @brief Notify the observer the first time an unordered pair goes
+  /// unanswered.
+  void notify_unregistered_pair(const std::type_info &t1,
+                                const std::type_info &t2) const {
+    const std::type_index i1(t1), i2(t2);
+    // Normalised, so the two argument orders map to the same entry.
+    const type_pair key = i2 < i1 ? type_pair(i2, i1) : type_pair(i1, i2);
+    if (reported_pairs->insert(key).second) on_unregistered_pair(t1, t2);
+  }
 
   // In the intermediate
   // See "https://en.cppreference.com/w/cpp/language/reinterpret_cast"
@@ -104,6 +128,19 @@ struct double_dispatch_member_function_table<InterfaceType,
 
   template <typename T1, typename T2>
   using member_function_callback = ReturnType (T1::*)(T2*, Args...) const;
+
+  /// @brief Notified when no registered entry answers a pair of arguments and
+  /// the fallback value is about to be returned.
+  ///
+  /// Invoked at most once per *unordered* pair of dynamic types: the fallback
+  /// branch sits in a hot comparison loop, so an undeduplicated notification
+  /// would be its own performance problem.
+  using unregistered_pair_observer =
+      std::function<void(const std::type_info &, const std::type_info &)>;
+
+  void set_unregistered_pair_observer(unregistered_pair_observer observer) {
+    on_unregistered_pair = std::move(observer);
+  }
 
   template <typename T1>
   using interface_function_callback = ReturnType (T1::*)(InterfaceType*,
@@ -165,15 +202,45 @@ struct double_dispatch_member_function_table<InterfaceType,
         return pair.first(t1, t2, pair.second, std::forward<Args>(args)...);
       }
     }
-    if (interface_member_function_table.count(t1_type) > 0) {
+    const bool t1_declares =
+        interface_member_function_table.count(t1_type) > 0;
+    const bool t2_declares =
+        interface_member_function_table.count(t2_type) > 0;
+
+    // Both types declare an answer for the whole interface. Asking only the
+    // first would make the result depend on argument order, so both are asked
+    // and the fallback settles any disagreement: if either side answers the
+    // fallback value, that is the result. The rule is symmetric by
+    // construction and needs only `==` from `ReturnType`.
+    //
+    // NOTE: "otherwise both agree" holds only because this table is
+    // instantiated with `bool(void)` and both relations pass `true` as the
+    // fallback, which leaves `false` as the single non-fallback value. A
+    // `ReturnType` with three or more values would need an explicit
+    // disagreement policy here.
+    if (t1_declares && t2_declares) {
+      const auto &p1 = interface_member_function_table.at(t1_type);
+      const auto &p2 = interface_member_function_table.at(t2_type);
+      // Each entry is invoked with its own transition first, since
+      // `casting_function_interface_table` always casts its first argument.
+      // `args` is copied rather than forwarded: both invocations need it.
+      const ReturnType r1 = p1.first(t1, t2, p1.second, args...);
+      const ReturnType r2 = p2.first(t2, t1, p2.second, args...);
+      if (r1 == fallback || r2 == fallback) return fallback;
+      return r1;
+    }
+    if (t1_declares) {
       const auto &pair = interface_member_function_table.at(t1_type);
       return pair.first(t1, t2, pair.second, std::forward<Args>(args)...);
-    } else if (interface_member_function_table.count(t2_type) > 0) {
+    } else if (t2_declares) {
       const auto &pair = interface_member_function_table.at(t2_type);
       // NOTE: t2 should come before t1 here since
       // `casting_function_interface_table` always casts its first argument
       return pair.first(t2, t1, pair.second, std::forward<Args>(args)...);
     }
+    // No entry answered the pair. The lookups above already established that;
+    // nothing here consults a table a second time.
+    if (on_unregistered_pair) notify_unregistered_pair(typeid(*t1), typeid(*t2));
     return fallback;
   }
 

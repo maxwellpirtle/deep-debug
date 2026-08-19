@@ -2,7 +2,9 @@
 
 #include "mcmini/model/objects/condition_variables.hpp"
 #include "mcmini/model/objects/mutex.hpp"
+#include "mcmini/model/transitions/mutex/mutex_init.hpp"
 #include "mcmini/model/transitions/mutex/mutex_lock.hpp"
+#include "mcmini/model/transitions/mutex/mutex_unlock.hpp"
 #include "mcmini/model/transition.hpp"
 #include "mcmini/model/transitions/condition_variables/condition_variables_init.hpp"
 
@@ -64,12 +66,18 @@ struct condition_variable_enqueue_thread : public model::transition{
     return this->cond_id == cs->get_id();
   }
 
+  // `modify` above is disabled by the mutex's state and releases the mutex, so
+  // this transition is dependent with every operation on that mutex.
   bool depends (const mutex_lock* ml) const {
     return this->mutex_id == ml->get_id();
   }
 
   bool depends (const mutex_unlock* mu) const {
     return this->mutex_id == mu->get_id();
+  }
+
+  bool depends (const mutex_init* mi) const {
+    return this->mutex_id == mi->get_id();
   }
 
   bool coenabled_with (const condition_variable_enqueue_thread* cwt ) const {

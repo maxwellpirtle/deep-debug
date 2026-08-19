@@ -12,7 +12,7 @@ struct sem_destroy : public model::transition {
 
  public:
   sem_destroy(runner_id_t executor, state::objid_t sem_id)
-      : transition(executor), sem_id(sem_id), count(count) {}
+      : transition(executor), sem_id(sem_id) {}
   ~sem_destroy() = default;
   status modify(model::mutable_state& s) const override {
     using namespace model::objects;

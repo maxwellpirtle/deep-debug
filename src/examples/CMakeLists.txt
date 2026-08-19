@@ -5,7 +5,9 @@ add_executable(deadly-embrace deadly-embrace.c)
 add_executable(fifo-example fifo.cpp)
 add_executable(producer-consumer producer-consumer.c)
 add_executable(recycled-thread recycled-thread.c)
-add_executable(test test.cpp)
+# CTest reserves the target name `test`, so this example is named for what it
+# actually demonstrates.
+add_executable(dining-philosophers test.cpp)
 target_link_libraries(hello-world PUBLIC -pthread libmcmini)
 target_link_libraries(cv-hello-world PUBLIC -pthread)
 target_link_libraries(cv-test PUBLIC -pthread)
