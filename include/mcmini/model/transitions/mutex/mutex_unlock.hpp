@@ -22,7 +22,7 @@ struct mutex_unlock : public mutex_transition {
       return status::disabled;
     }
 
-    s.add_state_for_obj(mutex_id, new mutex(mutex::unlocked, ms->get_location(), 0));
+    s.add_state_for_obj(mutex_id, new mutex(mutex::unlocked, 0));
     return status::exists;
   }
   std::string to_string() const override {

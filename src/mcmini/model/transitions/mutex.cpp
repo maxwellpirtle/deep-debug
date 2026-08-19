@@ -32,6 +32,10 @@ model::transition *mutex_lock_callback(runner_id_t p,
   // for this transition at (n_pointers=1, flag_index=0).
   const uint8_t static_init_flag = mcmini_payload_read_flag(rmb.cnts, 1, 0);
 
+  // CR-01: the model object is address-free (defaulted no-owner). The remote
+  // address is consumed here only to key the address -> objid mapping in
+  // `model_to_system_map`; downstream `modify` implementations compare and
+  // propagate object ids exclusively.
   transitions::ensure_primitive_initialized(
       m, remote_mut, static_init_flag,
       []() { return new mutex(mutex::unlocked); },

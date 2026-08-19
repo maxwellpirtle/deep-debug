@@ -22,7 +22,7 @@ struct mutex_lock : public mutex_transition {
     if (ms->is_locked()) {
       return status::disabled;
     }
-    s.add_state_for_obj(mutex_id, new mutex(mutex::locked, ms->get_location(), this->executor));
+    s.add_state_for_obj(mutex_id, new mutex(mutex::locked, this->executor));
     return status::exists;
   }
   std::string to_string() const override {

@@ -42,7 +42,7 @@ struct condition_variable_destroy : public model::transition {
     // Mark condition variable as destroyed
     s.add_state_for_obj(cond_id, new condition_variable(condition_variable::cv_destroyed,
         executor,
-        nullptr,  // Clear mutex association
+        model::invalid_objid,  // Clear mutex association
         0,
         cv->clone_policy()));
     return status::exists;

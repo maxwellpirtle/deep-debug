@@ -38,12 +38,12 @@ struct condition_variable_wait : public model::transition {
       return status::disabled;
     }
 
-    if (!(cv->waiter_can_exit(executor) && m->get_location() == cv->get_mutex() && m->is_unlocked())) {
+    if (!(cv->waiter_can_exit(executor) && mutex_id == cv->get_associated_mutex() && m->is_unlocked())) {
       return status::disabled;
     }
 
     // Reacquire the mutex: update its state to "locked" with the executor.
-    s.add_state_for_obj(mutex_id, new mutex(mutex::locked, m->get_location(), executor));
+    s.add_state_for_obj(mutex_id, new mutex(mutex::locked, executor));
 
     // The executor consumes the signal or broadcast that enabled it.
     std::unique_ptr<ConditionVariablePolicy> policy = cv->clone_policy();
@@ -53,7 +53,7 @@ struct condition_variable_wait : public model::transition {
     condition_variable::state new_state = new_waiting_count > 0
                                           ? condition_variable::cv_waiting
                                           : condition_variable::cv_signaled;
-    s.add_state_for_obj(cond_id, new condition_variable(new_state, executor, m->get_location(), new_waiting_count, std::move(policy)));
+    s.add_state_for_obj(cond_id, new condition_variable(new_state, executor, mutex_id, new_waiting_count, std::move(policy)));
     return status::exists;
   }
   state::objid_t get_id() const { return this->cond_id; }

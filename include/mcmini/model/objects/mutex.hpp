@@ -13,17 +13,23 @@ struct mutex : public model::visible_object_state {
 
  private:
   state current_state = state::uninitialized;
-  pthread_mutex_t* location;
-  runner_id_t owner;
+  // Default member initializer (CR-01): no constructor may leak an
+  // indeterminate `owner` -- it participates in `operator==` and in
+  // wait-enabledness checks (`is_locked_by`).
+  //
+  // The model deliberately holds NO `pthread_mutex_t*`: a model object is
+  // identified by the `state::objid_t` the coordinator assigned it, and the
+  // remote address -> objid correspondence lives exclusively in
+  // `model_to_system_map`. Transitions compare object ids, never addresses.
+  runner_id_t owner = 0;
 
  public:
   mutex() = default;
   ~mutex() = default;
   mutex(const mutex &) = default;
   mutex(state s) : current_state(s) {}
-  mutex(state s, pthread_mutex_t* loc) : current_state(s), location(loc) {}
-  mutex(state s, pthread_mutex_t* loc, runner_id_t tid): current_state(s), location(loc), owner(tid) {}
-  
+  mutex(state s, runner_id_t tid) : current_state(s), owner(tid) {}
+
   // ---- State Observation --- //
   bool operator==(const mutex &other) const {
     return this->current_state == other.current_state && this->owner == other.owner;
@@ -38,9 +44,6 @@ struct mutex : public model::visible_object_state {
   bool is_unlocked() const { return this->current_state == unlocked; }
   bool is_destroyed() const { return this->current_state == destroyed; }
   bool is_initialized() const { return this->current_state != uninitialized; }
-
-  
-  pthread_mutex_t* get_location() const { return this->location; }
 
   std::unique_ptr<visible_object_state> clone() const override {
     return extensions::make_unique<mutex>(*this);

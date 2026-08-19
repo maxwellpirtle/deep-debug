@@ -64,8 +64,14 @@ model::transition *cond_waiting_thread_enqueue_callback(
   // of scope this milestone). At the COND_WAIT write sites the wrapper has
   // already unlocked the mutex, so the flag read in cond_wait_callback below
   // is exact.
+  // CR-01: the model object is address-free (defaulted no-owner). The remote
+  // address is consumed only by the address -> objid mapping in
+  // `model_to_system_map`; `condition_variable_enqueue_thread::modify` stores
+  // the mutex's objid into the cv, and `condition_variables_wait::modify`
+  // gates enabledness on that id.
   transitions::ensure_primitive_initialized(
-      m, remote_mut, mutex_flag, []() { return new mutex(mutex::unlocked); },
+      m, remote_mut, mutex_flag,
+      []() { return new mutex(mutex::unlocked); },
       "Attempting to wait on a condition "
       "variable with an uninitialized mutex");
 
@@ -98,8 +104,11 @@ model::transition *cond_wait_callback(runner_id_t p,
 
   // The mutex flag here is exact: the wrapper wrote it AFTER pthread_cond_wait
   // released the mutex (see the D-11 NOTE at the enqueue site).
+  // CR-01: same as the enqueue site -- an address-free model object; the
+  // address only keys the objid mapping.
   transitions::ensure_primitive_initialized(
-      m, remote_mut, mutex_flag, []() { return new mutex(mutex::unlocked); },
+      m, remote_mut, mutex_flag,
+      []() { return new mutex(mutex::unlocked); },
       "Attempting to wait on a condition "
       "variable with an uninitialized mutex");
 

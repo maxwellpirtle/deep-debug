@@ -64,7 +64,7 @@ struct condition_variable_broadcast : public model::transition {
                                         : condition_variable::cv_signaled;
 
     s.add_state_for_obj(cond_id, new condition_variable(new_state, executor,
-                                                        cv->get_mutex(),
+                                                        cv->get_associated_mutex(),
                                                         new_waiting_count,
                                                         std::move(policy)));
     return status::exists;

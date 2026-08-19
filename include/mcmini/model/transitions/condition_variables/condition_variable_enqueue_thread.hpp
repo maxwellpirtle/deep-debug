@@ -43,8 +43,8 @@ struct condition_variable_enqueue_thread : public model::transition{
     }
     const int new_waiting_count = policy->return_wait_queue().size();
 
-    s.add_state_for_obj(cond_id, new condition_variable(condition_variable::cv_waiting, executor, m->get_location(), new_waiting_count, std::move(policy)));
-    s.add_state_for_obj(mutex_id, new mutex(mutex::unlocked, m->get_location(), 0));
+    s.add_state_for_obj(cond_id, new condition_variable(condition_variable::cv_waiting, executor, mutex_id, new_waiting_count, std::move(policy)));
+    s.add_state_for_obj(mutex_id, new mutex(mutex::unlocked, 0));
     return status::exists;
   }
   state::objid_t get_id() const { return this->cond_id; }

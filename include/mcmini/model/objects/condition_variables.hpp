@@ -1,9 +1,9 @@
 #pragma once
 
 #include "mcmini/misc/extensions/unique_ptr.hpp"
+#include "mcmini/model/state.hpp"
 #include "mcmini/model/visible_object_state.hpp"
 #include "mcmini/misc/cond/cond_var_arbitrary_policy.hpp"
-#include "mcmini/model/objects/mutex.hpp"
 #include "mcmini/Thread_queue.h"
 #include <memory>
 #include <string>
@@ -33,7 +33,11 @@ struct condition_variable : public model::visible_object_state {
 
   state current_state = state::cv_uninitialized;
   runner_id_t running_thread = 0;
-  pthread_mutex_t* associated_mutex = nullptr;
+  // The mutex re-acquired on wakeup, named by the `state::objid_t` the
+  // coordinator assigned it. The model never stores a `pthread_mutex_t*`:
+  // the remote address -> objid correspondence lives exclusively in
+  // `model_to_system_map`, and transitions compare object ids only.
+  model::state::objid_t associated_mutex = model::invalid_objid;
   int waiting_count = 0;
   std::unique_ptr<ConditionVariablePolicy> policy = make_default_policy();
 
@@ -54,18 +58,18 @@ struct condition_variable : public model::visible_object_state {
     : current_state(s),
       policy(p != nullptr ? std::unique_ptr<ConditionVariablePolicy>(p)
                           : make_default_policy()) {}
-  condition_variable(state s, runner_id_t tid, pthread_mutex_t* mutex, int count)
+  condition_variable(state s, runner_id_t tid, model::state::objid_t mutex, int count)
     : current_state(s), running_thread(tid), associated_mutex(mutex), waiting_count(count){}
 
   /* The successor form: carries _p_, the policy a transition mutated, into
      the state it publishes. */
-  condition_variable(state s, runner_id_t tid, pthread_mutex_t* mutex, int count,
+  condition_variable(state s, runner_id_t tid, model::state::objid_t mutex, int count,
     std::unique_ptr<ConditionVariablePolicy> p)
     : current_state(s), running_thread(tid), associated_mutex(mutex),
       waiting_count(count),
       policy(p != nullptr ? std::move(p) : make_default_policy()) {}
 
-  condition_variable(state s, runner_id_t tid, pthread_mutex_t* mutex, int count,
+  condition_variable(state s, runner_id_t tid, model::state::objid_t mutex, int count,
     const std::vector<std::pair<runner_id_t, condition_variable_status>>& thread_states)
       : current_state(s), running_thread(tid), associated_mutex(mutex), waiting_count(count) {
         // Initialize the policy according to the states of the threads in waiting queue
@@ -110,11 +114,13 @@ struct condition_variable : public model::visible_object_state {
     return std::unique_ptr<ConditionVariablePolicy>(this->policy->clone());
   }
 
-  void set_associated_mutex(pthread_mutex_t* mutex) {
+  void set_associated_mutex(model::state::objid_t mutex) {
     this->associated_mutex = mutex;
   }
 
-  pthread_mutex_t* get_mutex() const {return this->associated_mutex;}
+  model::state::objid_t get_associated_mutex() const {
+    return this->associated_mutex;
+  }
 
   bool has_waiters() const {return this->policy->has_waiters();}
 

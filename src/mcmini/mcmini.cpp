@@ -51,16 +51,15 @@ visible_object_state *translate_recorded_object_to_model(
     const ::visible_object &recorded_object,
     const std::unordered_map<
         void *, std::vector<std::pair<runner_id_t, condition_variable_status>>>
-        cv_waiting_threads) {
+        cv_waiting_threads,
+    const model_to_system_map &recorder) {
   // TODO: A function table would be slightly better, but this works perfectly
   // fine too.
   switch (recorded_object.type) {
     case MUTEX: {
       auto mutex_state =
           static_cast<objects::mutex::state>(recorded_object.mut_state);
-      pthread_mutex_t *mutex_location =
-          (pthread_mutex_t *)recorded_object.location;
-      return new objects::mutex(mutex_state, mutex_location);
+      return new objects::mutex(mutex_state);
     }
     case CONDITION_VARIABLE: {
       // Create the condition variable model object with full state information
@@ -69,8 +68,15 @@ visible_object_state *translate_recorded_object_to_model(
 
       runner_id_t interacting_thread =
           recorded_object.cond_state.interacting_thread;
-      pthread_mutex_t *associated_mutex =
+      // The spy records the remote `pthread_mutex_t*`; the model stores only
+      // object ids, so resolve the address through the recorder. Mutexes are
+      // observed before condition variables (see the restore loop), so an
+      // associated mutex that was recorded is already mapped here.
+      pthread_mutex_t *recorded_mutex =
           recorded_object.cond_state.associated_mutex;
+      model::state::objid_t associated_mutex =
+          recorded_mutex != nullptr ? recorder.get_model_of_object(recorded_mutex)
+                                    : model::invalid_objid;
       int count = recorded_object.cond_state.count;
       // get waiting threads from the map
       auto it = cv_waiting_threads.find(recorded_object.location);
@@ -180,6 +186,7 @@ void do_model_checking_from_dmtcp_ckpt_file(const config &config) {
     fifo fifo("/tmp/mcmini-fifo");
     ::visible_object current_obj;
     std::vector<::visible_object> recorded_threads;
+    std::vector<::visible_object> recorded_objects;
     std::unordered_map<
         void *, std::vector<std::pair<runner_id_t, condition_variable_status>>>
         cv_waiting_threads;
@@ -193,10 +200,26 @@ void do_model_checking_from_dmtcp_ckpt_file(const config &config) {
                 std::make_pair(current_obj.waiting_queue_state.waiting_id,
                                current_obj.waiting_queue_state.cv_state));
       } else {
-        recorder.observe_object(current_obj.location,
-                                translate_recorded_object_to_model(
-                                    current_obj, cv_waiting_threads));
+        recorded_objects.emplace_back(std::move(current_obj));
       }
+    }
+
+    // Observe condition variables last: their model state names the
+    // associated mutex by `objid_t`, so the mutex's address must already be
+    // mapped by the recorder when the cv is translated.
+    for (const ::visible_object &recorded_object : recorded_objects) {
+      if (recorded_object.type == CONDITION_VARIABLE) continue;
+      recorder.observe_object(recorded_object.location,
+                              translate_recorded_object_to_model(
+                                  recorded_object, cv_waiting_threads,
+                                  recorder));
+    }
+    for (const ::visible_object &recorded_object : recorded_objects) {
+      if (recorded_object.type != CONDITION_VARIABLE) continue;
+      recorder.observe_object(recorded_object.location,
+                              translate_recorded_object_to_model(
+                                  recorded_object, cv_waiting_threads,
+                                  recorder));
     }
 
     std::sort(recorded_threads.begin(), recorded_threads.end(),
