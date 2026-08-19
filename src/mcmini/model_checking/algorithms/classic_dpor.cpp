@@ -33,6 +33,11 @@
 #include "mcmini/model/transitions/process/abort.hpp"
 #include "mcmini/model/transitions/process/exit.hpp"
 #include "mcmini/model/transitions/semaphore/callbacks.hpp"
+#include "mcmini/model/transitions/semaphore/sem_destroy.hpp"
+#include "mcmini/model/transitions/semaphore/sem_init.hpp"
+#include "mcmini/model/transitions/semaphore/sem_post.hpp"
+#include "mcmini/model/transitions/semaphore/sem_wait.hpp"
+#include "mcmini/model/transitions/semaphore/semaphore_transition.hpp"
 #include "mcmini/model/transitions/thread/callbacks.hpp"
 #include "mcmini/model_checking/algorithms/classic_dpor.hpp"
 #include "mcmini/model_checking/algorithms/classic_dpor/clock_vector.hpp"
@@ -616,6 +621,26 @@ classic_dpor::dependency_relation_type classic_dpor::default_dependencies() {
   dr.register_dd_entry<const condition_variable_destroy,
                        const condition_variable_signal>(
       &condition_variable_destroy::depends);
+
+  // The semaphore family. One line per *concrete* leaf: `call_or` keys on the
+  // dynamic `type_index`, so an entry filed under `semaphore_transition` would
+  // match nothing and silently leave every semaphore pair on the fallback. The
+  // explicit `<const LeafType>` argument is what files the entry under the leaf
+  // -- without it, deduction picks `semaphore_transition` from the
+  // member-function pointer.
+  //
+  // The leaf names are qualified because `using namespace transitions` above
+  // makes each of them ambiguous with the POSIX function of the same name,
+  // declared by the <semaphore.h> the model headers pull in transitively.
+  dr.register_dd_entry<const transitions::sem_init>(
+      &semaphore_transition::depends);
+  dr.register_dd_entry<const transitions::sem_post>(
+      &semaphore_transition::depends);
+  dr.register_dd_entry<const transitions::sem_wait>(
+      &semaphore_transition::depends);
+  dr.register_dd_entry<const transitions::sem_destroy>(
+      &semaphore_transition::depends);
+
   dr.set_unregistered_pair_observer(unregistered_pair_alarm("dependence"));
   return dr;
 }
@@ -660,6 +685,22 @@ classic_dpor::coenabled_relation_type classic_dpor::default_coenabledness() {
   cr.register_dd_entry<const condition_variable_enqueue_thread,
                        const mutex_unlock>(
       &condition_variable_enqueue_thread::coenabled_with);
+
+  // The semaphore family answers an explicit `true` -- see
+  // `semaphore_transition::coenabled_with` for why no semaphore pair has a
+  // provable `false`. Behaviourally identical to the fallback, but it records
+  // that the pair was analysed and keeps semaphores out of the alarm's output.
+  // Per concrete leaf, and qualified against the POSIX names, for the same two
+  // reasons as the dependence side.
+  cr.register_dd_entry<const transitions::sem_init>(
+      &semaphore_transition::coenabled_with);
+  cr.register_dd_entry<const transitions::sem_post>(
+      &semaphore_transition::coenabled_with);
+  cr.register_dd_entry<const transitions::sem_wait>(
+      &semaphore_transition::coenabled_with);
+  cr.register_dd_entry<const transitions::sem_destroy>(
+      &semaphore_transition::coenabled_with);
+
   cr.set_unregistered_pair_observer(unregistered_pair_alarm("co-enabledness"));
   return cr;
 }

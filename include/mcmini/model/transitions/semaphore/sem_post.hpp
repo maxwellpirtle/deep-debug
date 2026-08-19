@@ -1,18 +1,15 @@
 #pragma once
 
 #include "mcmini/model/objects/semaphore.hpp"
-#include "mcmini/model/transition.hpp"
+#include "mcmini/model/transitions/semaphore/semaphore_transition.hpp"
 
 namespace model {
 namespace transitions {
 
-struct sem_post : public model::transition {
- private:
-  const state::objid_t sem_id;
-
+struct sem_post : public semaphore_transition {
  public:
   sem_post(runner_id_t executor, state::objid_t sem_id)
-      : transition(executor), sem_id(sem_id) {}
+      : semaphore_transition(executor, sem_id) {}
   ~sem_post() = default;
   status modify(model::mutable_state& s) const override {
     using namespace model::objects;
@@ -20,7 +17,6 @@ struct sem_post : public model::transition {
     s.add_state_for_obj(sem_id, new semaphore(sem->count() + 1));
     return status::exists;
   }
-  state::objid_t get_id() const { return this->sem_id; }
   std::string to_string() const override {
     return "sem_post(semaphore:" + std::to_string(sem_id) + ")";
   }

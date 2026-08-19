@@ -203,10 +203,13 @@ void check_unregistered_pair_alarm() {
 
   // The same, for two *different* unanswered types: this is what proves the
   // key is normalised rather than merely identical in both orders.
+  // `condition_variable_signal` has no entry against `condition_variable_init`
+  // and, per D-14, the residual CV x CV pairs are deliberately left for the
+  // alarm to report rather than closed in this phase.
   reported.clear();
-  const mt::sem_post posts(3, 300);
-  dr.call_or(true, &init_a, &posts);
-  dr.call_or(true, &posts, &init_a);
+  const mt::condition_variable_signal signals(3, 300);
+  dr.call_or(true, &init_a, &signals);
+  dr.call_or(true, &signals, &init_a);
   CHECK(reported.size() == 1,
         "an unanswered heterogeneous pair must be reported once across both "
         "argument orders, saw "
@@ -374,6 +377,158 @@ void check_broadcast_and_destroy() {
                      "broadcast x destroy co-enabledness, other cv");
 }
 
+// MARK: The semaphore family
+
+const objid_t THE_SEM = 100;
+const objid_t ANOTHER_SEM = 200;
+
+/// @brief One of each semaphore leaf, all naming `sem`, on four consecutive
+/// executors starting at `first_executor`.
+///
+/// Two rosters on the *same* semaphore rather than one roster compared against
+/// itself: the diagonal of the sweep (`sem_wait` x `sem_wait`) needs two
+/// distinct objects, and on the distinct-id half it needs two objects naming
+/// two different semaphores.
+std::vector<transition_ptr> make_semaphore_roster(runner_id_t first_executor,
+                                                  objid_t sem) {
+  std::vector<transition_ptr> r;
+  r.push_back(own(new mt::sem_init(first_executor + 0, sem)));
+  r.push_back(own(new mt::sem_post(first_executor + 1, sem)));
+  r.push_back(own(new mt::sem_wait(first_executor + 2, sem)));
+  r.push_back(own(new mt::sem_destroy(first_executor + 3, sem)));
+  return r;
+}
+
+/// All sixteen ordered pairs of semaphore leaves, on one semaphore and on two.
+///
+/// The distinct-semaphore half is the load-bearing one. A pair that fell
+/// through to the conservative fallback would answer "dependent" for both
+/// halves alike, so only the distinct-id assertions tell "registered and
+/// resolved" apart from "never registered" -- which is exactly the silent
+/// no-op a family-base registration would have produced.
+void check_semaphore_x_semaphore() {
+  const classic_dpor::dependency_relation_type dr =
+      classic_dpor::default_dependencies();
+  const classic_dpor::coenabled_relation_type cr =
+      classic_dpor::default_coenabledness();
+
+  const std::vector<transition_ptr> a = make_semaphore_roster(1, THE_SEM);
+  const std::vector<transition_ptr> b = make_semaphore_roster(5, THE_SEM);
+  const std::vector<transition_ptr> c = make_semaphore_roster(9, ANOTHER_SEM);
+
+  for (size_t i = 0; i < a.size(); ++i) {
+    for (size_t j = 0; j < b.size(); ++j) {
+      expect_both_orders(dr, *a[i], *b[j], true,
+                         "semaphore x semaphore, one semaphore");
+      expect_both_orders(dr, *a[i], *c[j], false,
+                         "semaphore x semaphore, two semaphores");
+
+      // D-07: no semaphore pair has a state-independent proof that both can
+      // never be enabled, so every pair is co-enabled on one semaphore and on
+      // two alike.
+      expect_both_orders(cr, *a[i], *b[j], true,
+                         "semaphore co-enabledness, one semaphore");
+      expect_both_orders(cr, *a[i], *c[j], true,
+                         "semaphore co-enabledness, two semaphores");
+    }
+  }
+}
+
+/// The cross-family half of the claim: no transition outside the semaphore
+/// family reads or writes a semaphore, so none of them conflicts with one.
+///
+/// Each partner is tested twice, once carrying an id numerically equal to the
+/// semaphore's and once not. Ids are drawn from a single `objid_t` space, so
+/// numeric equality across families is possible and must not be mistaken for
+/// "same object" -- the relation distinguishes them by `dynamic_cast`, not by
+/// id.
+///
+/// The mutex partners have no interface entry until plan 02-03 lands, so today
+/// these pairs resolve through the semaphore side alone; afterwards they become
+/// two-sided collisions where the mutex family also answers "not a mutex
+/// operation, therefore independent". The expected answer is the same in both
+/// worlds, which is why it is written as a plain expectation rather than a
+/// conditional one.
+void check_semaphore_x_other_families() {
+  const classic_dpor::dependency_relation_type dr =
+      classic_dpor::default_dependencies();
+
+  const std::vector<transition_ptr> sems = make_semaphore_roster(1, THE_SEM);
+
+  // `thread_create` answers on its *target*, so the target is a runner no
+  // semaphore transition executes on. A creation of the very thread that then
+  // performs a semaphore operation genuinely is dependent, and that is a claim
+  // about runners, not about semaphores.
+  const runner_id_t RID_UNRELATED = 90;
+
+  std::vector<transition_ptr> partners;
+  partners.push_back(own(new mt::mutex_init(20, THE_SEM)));
+  partners.push_back(own(new mt::mutex_init(21, ANOTHER_SEM)));
+  partners.push_back(own(new mt::mutex_lock(22, THE_SEM)));
+  partners.push_back(own(new mt::mutex_lock(23, ANOTHER_SEM)));
+  partners.push_back(own(new mt::mutex_unlock(24, THE_SEM)));
+  partners.push_back(own(new mt::mutex_unlock(25, ANOTHER_SEM)));
+  partners.push_back(own(new mt::thread_create(26, RID_UNRELATED)));
+  partners.push_back(own(new mt::thread_start(RID_UNRELATED)));
+  partners.push_back(own(new mt::condition_variable_init(27, THE_SEM)));
+  partners.push_back(own(new mt::condition_variable_init(28, ANOTHER_SEM)));
+  partners.push_back(own(new mt::condition_variable_signal(29, THE_SEM)));
+  partners.push_back(own(new mt::condition_variable_signal(30, ANOTHER_SEM)));
+
+  for (size_t i = 0; i < sems.size(); ++i) {
+    for (size_t j = 0; j < partners.size(); ++j) {
+      expect_both_orders(dr, *sems[i], *partners[j], false,
+                         "semaphore x non-semaphore");
+    }
+  }
+}
+
+/// The semaphore family's co-enabledness answer must come from the *registered*
+/// relation, not from the fallback.
+///
+/// Both produce `true`, so the value alone proves nothing. The dispatch table's
+/// unregistered-pair observer is the only mechanical way to tell "analysed, and
+/// they really are co-enabled" from "nobody registered this" -- which is the
+/// distinction D-07 says the explicit registration exists to draw.
+void check_semaphore_coenabledness_does_not_fall_through() {
+  classic_dpor::coenabled_relation_type cr =
+      classic_dpor::default_coenabledness();
+
+  size_t fallbacks = 0;
+  cr.set_unregistered_pair_observer(
+      [&fallbacks](const std::type_info &, const std::type_info &) {
+        ++fallbacks;
+      });
+
+  const std::vector<transition_ptr> a = make_semaphore_roster(1, THE_SEM);
+  const std::vector<transition_ptr> b = make_semaphore_roster(5, THE_SEM);
+  const std::vector<transition_ptr> c = make_semaphore_roster(9, ANOTHER_SEM);
+
+  for (size_t i = 0; i < a.size(); ++i) {
+    for (size_t j = 0; j < b.size(); ++j) {
+      cr.call_or(true, a[i].get(), b[j].get());
+      cr.call_or(true, b[j].get(), a[i].get());
+      cr.call_or(true, a[i].get(), c[j].get());
+      cr.call_or(true, c[j].get(), a[i].get());
+    }
+  }
+  CHECK(fallbacks == 0,
+        "every semaphore pair must be answered by a registered co-enabledness "
+        "relation, but "
+            << fallbacks << " reached the fallback");
+
+  // Positive control on the same table, so the zero above cannot pass merely
+  // because the observer was never wired up. Two `condition_variable_wait`s
+  // are part of D-14's deliberate leave-behind and reach the fallback.
+  const mt::condition_variable_wait waits_a(40, 1, 2);
+  const mt::condition_variable_wait waits_b(41, 1, 2);
+  cr.call_or(true, &waits_a, &waits_b);
+  CHECK(fallbacks == 1,
+        "the observer must fire for a genuinely unanswered co-enabledness "
+        "pair, saw "
+            << fallbacks);
+}
+
 }  // namespace
 
 int main() {
@@ -388,6 +543,9 @@ int main() {
   check_process_transitions();
   check_cv_x_mutex();
   check_broadcast_and_destroy();
+  check_semaphore_x_semaphore();
+  check_semaphore_x_other_families();
+  check_semaphore_coenabledness_does_not_fall_through();
 
   if (g_failures > 0) {
     std::cerr << g_failures << " check(s) failed" << std::endl;
