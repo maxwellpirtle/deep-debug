@@ -11,21 +11,6 @@ namespace transitions {
 struct condition_variable_signal : public model::transition {
  private:
   const state::objid_t cond_id; /* The condition variable this transition signals */
-  mutable bool had_waiters = false;
-  state::objid_t get_objid_by_location(const mutable_state& s, pthread_mutex_t* mutex_location) const {
-    
-    for (state::objid_t id = 0; id < invalid_objid; id++){
-      if (!s.contains_object_with_id(id)) continue;
-
-      // const visible_object_state* obj = s.state::get_state_of_object(id);
-      const visible_object_state* obj = s.get_state_of_object<visible_object_state>(id);
-      const objects::mutex* m = dynamic_cast<const objects::mutex*>(obj);
-      if (m && m->get_location() == mutex_location) {
-        return id;
-      }
-    }
-    return invalid_objid;
-  }
 
  public:
   condition_variable_signal(runner_id_t executor, state::objid_t cond_id)
@@ -38,56 +23,45 @@ struct condition_variable_signal : public model::transition {
     // Retrive the state of the condition variable
     const condition_variable* cv = s.get_state_of_object<condition_variable>(cond_id);
 
-    // Count waiting threads BEFORE signal
-    int prev_waiting_count = 0;
-    for (auto id: cv->get_policy()->return_wait_queue()) {
-      if (cv->get_policy()->get_thread_cv_state(id) == CV_WAITING) {
-        prev_waiting_count++;
-      }
-    }
-
     if (cv->is_uninitialized()) {
       return status::undefined;
     }
-    
+
     if (cv->is_destroyed()) {
       return status::undefined;
     }
-    
+
     // Check if there are waiters (if not, signal is a no-op but still valid)
     if (!cv->has_waiters()) {
       return status::exists; //valid transition (lost wakeup)
     }
 
-    if (!cv->has_waiters()) {
-      return status::exists; // valid transition (lost wakeup)
-    }
-  
+    std::unique_ptr<ConditionVariablePolicy> policy = cv->clone_policy();
+
     // Find only CV_WAITING threads (not CV_PREWAITING)
     std::vector<runner_id_t> waiting_threads;
-    const auto& wait_queue = cv->get_policy()->return_wait_queue();
-    for (auto tid : wait_queue) {
-      if (cv->get_policy()->get_thread_cv_state(tid) == CV_WAITING) {
+    for (auto tid : policy->return_wait_queue()) {
+      if (policy->get_thread_cv_state(tid) == CV_WAITING) {
         waiting_threads.push_back(tid);
       }
     }
-    
-    // Add only CV_WAITING threads to wake groups
+
+    // A single wake group: exactly one of its members may consume the signal.
     if (!waiting_threads.empty()) {
-      cv->get_policy()->add_to_wake_groups(waiting_threads);
+      policy->add_to_wake_groups(waiting_threads);
     }
 
     // Update the condition variable state
-    const int new_waiting_count = cv->get_policy()->return_wait_queue().size();
+    const int new_waiting_count = policy->return_wait_queue().size();
     condition_variable::state new_state = new_waiting_count > 0
                                           ? condition_variable::cv_waiting
                                           : condition_variable::cv_signaled;
-                              
-    s.add_state_for_obj(cond_id, new condition_variable(new_state, new_waiting_count));
-    condition_variable* mutable_cv = new condition_variable(new_state, new_waiting_count);
-    mutable_cv->check_for_lost_wakeup(true, prev_waiting_count); // Check for lost wakeup if this was a signal
 
-    return status::exists;   
+    s.add_state_for_obj(cond_id, new condition_variable(new_state, executor,
+                                                        cv->get_mutex(),
+                                                        new_waiting_count,
+                                                        std::move(policy)));
+    return status::exists;
   }
 
   state::objid_t get_id() const { return this->cond_id; }

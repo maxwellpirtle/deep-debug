@@ -33,17 +33,18 @@ struct condition_variable_destroy : public model::transition {
     if (cv->is_destroyed()) {
       return status::undefined;
     }
-    
+
     // Check if there are still threads waiting on this condition variable
     if (cv->has_waiters()) {
       return status::undefined; // Error: destroying condition variable with waiters
     }
-    
+
     // Mark condition variable as destroyed
-    s.add_state_for_obj(cond_id, new condition_variable(condition_variable::cv_destroyed, 
-        executor, 
+    s.add_state_for_obj(cond_id, new condition_variable(condition_variable::cv_destroyed,
+        executor,
         nullptr,  // Clear mutex association
-        0));
+        0,
+        cv->clone_policy()));
     return status::exists;
   }
   state::objid_t get_id() const { return this->cond_id; }

@@ -32,21 +32,21 @@ struct condition_variable_enqueue_thread : public model::transition{
       return status::disabled;
     }
 
-    condition_variable_status current_state = cv->get_policy()->get_thread_cv_state(executor);
-    if (current_state == CV_PREWAITING) {
-    // Thread not fully in wait state - update to WAITING before proceeding
-      cv->get_policy()->update_thread_cv_state(executor, CV_WAITING);
+    std::unique_ptr<ConditionVariablePolicy> policy = cv->clone_policy();
+    if (policy->get_thread_cv_state(executor) == CV_PREWAITING) {
+      // Already queued by a checkpoint restore; promote rather than requeue.
+      policy->update_thread_cv_state(executor, CV_WAITING);
+    } else {
+      policy->add_waiter_with_state(executor, CV_WAITING);
     }
+    const int new_waiting_count = policy->return_wait_queue().size();
 
-    cv->get_policy()->add_waiter_with_state(executor, CV_WAITING);
-    const int new_waiting_count = cv->get_policy()->return_wait_queue().size();
-    
-    s.add_state_for_obj(cond_id, new condition_variable(condition_variable::cv_waiting, executor, m->get_location(), new_waiting_count));
-    s.add_state_for_obj(mutex_id, new mutex(mutex::unlocked));
+    s.add_state_for_obj(cond_id, new condition_variable(condition_variable::cv_waiting, executor, m->get_location(), new_waiting_count, std::move(policy)));
+    s.add_state_for_obj(mutex_id, new mutex(mutex::unlocked, m->get_location(), 0));
     return status::exists;
   }
   state::objid_t get_id() const { return this->cond_id; }
-  state::objid_t get_mutex_id() const { return this->mutex_id; }  
+  state::objid_t get_mutex_id() const { return this->mutex_id; }
   std::string to_string() const override {
     return "pthread_cond_wait(cond:" + std::to_string(cond_id) + ", mutex:" + std::to_string(mutex_id) + "(awake -> asleep))";
   }
@@ -79,7 +79,7 @@ struct condition_variable_enqueue_thread : public model::transition{
   bool coenabled_with (const mutex_lock* ml) const {
     return this->mutex_id != ml->get_id();
   }
-  
+
   bool coenabled_with (const mutex_unlock* mu) const {
     return this->mutex_id != mu->get_id();
   }
