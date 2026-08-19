@@ -101,27 +101,6 @@ class mutable_state : public state {
    * and are independently modifiable with respect to the first state.
    */
   std::unique_ptr<mutable_state> clone() const { return this->mutable_clone(); }
-
-  // Bring the base-class (virtual and template) overloads into scope so the
-  // templates declared below do not hide them (`-Werror=overloaded-virtual`).
-  using state::get_state_of_object;
-  using state::get_state_of_runner;
-
-  template <typename concrete_visible_object_state>
-  const concrete_visible_object_state *get_state_of_object(objid_t id) const {
-    return (static_cast<const state *>(this))
-        ->get_state_of_object<concrete_visible_object_state>(id);
-  }
-
-  template <typename concrete_visible_object_state>
-  const concrete_visible_object_state *get_state_of_runner(
-      runner_id_t id) const {
-    static_assert(std::is_base_of<visible_object_state,
-                                  concrete_visible_object_state>::value,
-                  "Concrete type must be a subtype of `visible_object_state`");
-    return (static_cast<const state *>(this))
-        ->get_state_of_runner<concrete_visible_object_state>(id);
-  }
 };
 
 constexpr static auto invalid_objid =
