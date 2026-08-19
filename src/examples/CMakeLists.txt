@@ -35,7 +35,8 @@ endforeach()
 # sit next to `libmcmini.so` at the top of the build tree or the run dies
 # before model checking begins. Like the sem_destroy pair, they never join the
 # frozen benchmark suite or any measurement path.
-foreach(static_init_control mutex-static-clean mutex-garbage-ub)
+foreach(static_init_control mutex-static-clean mutex-garbage-ub cond-static-clean
+    cond-garbage-ub)
   add_executable(${static_init_control} ${static_init_control}.c)
   target_link_libraries(${static_init_control} PUBLIC -pthread)
   target_compile_options(${static_init_control} PRIVATE -Wall)
