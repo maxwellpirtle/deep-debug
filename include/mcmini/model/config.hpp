@@ -15,7 +15,7 @@ struct config {
    * The maximum number of transitions that can be run
    * by any _single thread_ while running the model checker
    */
-  uint64_t max_thread_execution_depth;
+  uint64_t max_thread_execution_depth = MAX_TOTAL_TRANSITIONS_IN_PROGRAM;
 
   /**
    * The maximum number of transitions that can be contained in any given trace.
@@ -136,6 +136,13 @@ struct config {
    * from.
    */
   std::string checkpoint_file = "";
+
+  /**
+   * The path the machine-readable end-of-run statistics record is written to.
+   *
+   * An empty value means the record is written to STDOUT.
+   */
+  std::string stats_file = "";
 
   // Name of the target executable that will be model checked
   std::string target_executable = "";

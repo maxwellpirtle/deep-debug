@@ -73,13 +73,13 @@ public:
    * - if, at any point during verification, one of the corresponding processes
    * crashes.
    */
-  virtual void verify_using(coordinator &coordinator,
-                            const callbacks &callbacks) = 0;
+  virtual stats verify_using(coordinator &coordinator,
+                             const callbacks &callbacks) = 0;
   virtual ~algorithm() = default;
 
-  void verify_using(coordinator &coordinator) {
+  stats verify_using(coordinator &coordinator) {
     callbacks no_callbacks;
-    this->verify_using(coordinator, no_callbacks);
+    return this->verify_using(coordinator, no_callbacks);
   }
 };
 

@@ -134,8 +134,8 @@ bool classic_dpor::are_dependent(const model::transition &t1,
          this->config.dependency_relation.call_or(true, &t1, &t2);
 }
 
-void classic_dpor::verify_using(coordinator &coordinator,
-                                const callbacks &callbacks) {
+stats classic_dpor::verify_using(coordinator &coordinator,
+                                 const callbacks &callbacks) {
   // The code below is an implementation of the model-checking algorithm of
   // Flanagan and Godefroid from 2005.
 
@@ -245,14 +245,17 @@ void classic_dpor::verify_using(coordinator &coordinator,
               "The program exited abnormally");
         }
       } catch (const model::undefined_behavior_exception &ube) {
+        model_checking_stats.undefined_behaviors++;
         callbacks.undefined_behavior(context, model_checking_stats, ube);
-        return;
+        return model_checking_stats;
       } catch (const real_world::process::termination_error &te) {
+        model_checking_stats.abnormal_terminations++;
         callbacks.abnormal_termination(context, model_checking_stats, te);
-        return;
+        return model_checking_stats;
       } catch (const real_world::process::nonzero_exit_code_error &nzec) {
+        model_checking_stats.nonzero_exit_codes++;
         callbacks.nonzero_exit_code(context, model_checking_stats, nzec);
-        return;
+        return model_checking_stats;
       }
     }
 
@@ -262,9 +265,11 @@ void classic_dpor::verify_using(coordinator &coordinator,
       if (config.stop_at_first_deadlock) {
         log_info(dpor_logger)
             << "First deadlock found. Reporting and stopping model checking.";
+        model_checking_stats.deadlocks++;
         callbacks.deadlock(context, model_checking_stats);
-        return;
+        return model_checking_stats;
       } else {
+        model_checking_stats.deadlocks++;
         callbacks.deadlock(context, model_checking_stats);
       }
     }
@@ -309,11 +314,14 @@ void classic_dpor::verify_using(coordinator &coordinator,
         // since we only account for scheduling that occurs during _expansion_.
         round_robin_sched.clear();
       } catch (const model::undefined_behavior_exception &ube) {
+        model_checking_stats.undefined_behaviors++;
         callbacks.undefined_behavior(context, model_checking_stats, ube);
-        return;
+        return model_checking_stats;
       }
     }
   }
+  model_checking_stats.exhausted = !reached_max_depth;
+  return model_checking_stats;
 }
 
 void classic_dpor::continue_dpor_by_expanding_trace_with(

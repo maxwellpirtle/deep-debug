@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -111,7 +112,27 @@ runner_state *translate_recorded_runner_to_model(
   }
 }
 
+/**
+ * @brief Resolve the stream the end-of-run statistics record is written to.
+ *
+ * The stream is opened before any model checking begins so that an unwritable
+ * target fails immediately instead of after a complete search.
+ */
+static std::ostream &open_stats_stream(const model::config &config,
+                                       std::ofstream &out) {
+  if (config.stats_file.empty()) return std::cout;
+  out.open(config.stats_file);
+  if (!out) {
+    std::cerr << "mcmini: --stats-file: cannot open '" << config.stats_file
+              << "'" << std::endl;
+    exit(1);
+  }
+  return out;
+}
+
 void do_model_checking(const config &config) {
+  std::ofstream stats_out;
+  std::ostream &stats_os = open_stats_stream(config, stats_out);
   algorithm::callbacks c;
   target target_program(config.target_executable,
                         config.target_executable_args);
@@ -121,11 +142,19 @@ void do_model_checking(const config &config) {
                           make_unique<fork_process_source>(target_program));
   model_checking::reporter reporter(config);
   model_checking::classic_dpor classic_dpor_checker(config);
-  classic_dpor_checker.verify_using(coordinator, reporter);
+  const auto check_start = std::chrono::steady_clock::now();
+  model_checking::stats stats =
+      classic_dpor_checker.verify_using(coordinator, reporter);
+  stats.check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - check_start)
+                       .count();
+  reporter.write_summary(stats_os, stats);
   std::cout << "Model checking completed!" << std::endl;
 }
 
 void do_model_checking_from_dmtcp_ckpt_file(const config &config) {
+  std::ofstream stats_out;
+  std::ostream &stats_os = open_stats_stream(config, stats_out);
   volatile mcmini_shm_file *rw_region =
       xpc_resources::get_instance().get_rw_region()->as<mcmini_shm_file>();
 
@@ -240,7 +269,13 @@ void do_model_checking_from_dmtcp_ckpt_file(const config &config) {
 
   model_checking::reporter reporter(config);
   model_checking::classic_dpor classic_dpor_checker(config);
-  classic_dpor_checker.verify_using(coordinator, reporter);
+  const auto check_start = std::chrono::steady_clock::now();
+  model_checking::stats stats =
+      classic_dpor_checker.verify_using(coordinator, reporter);
+  stats.check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - check_start)
+                       .count();
+  reporter.write_summary(stats_os, stats);
   std::cerr << "Deep debugging completed!" << std::endl;
 }
 
@@ -358,6 +393,9 @@ int main_cpp(int argc, const char **argv) {
                strcmp(cur_arg[0], "-ckpt") == 0) {
       mcmini_config.checkpoint_file = cur_arg[1];
       cur_arg += 2;
+    } else if (strcmp(cur_arg[0], "--stats-file") == 0) {
+      mcmini_config.stats_file = cur_arg[1];
+      cur_arg += 2;
     } else if (strcmp(cur_arg[0], "--log-level") == 0 ||
                strcmp(cur_arg[0], "-log") == 0) {
       mcmini_config.global_severity_level = logging::parse_severity(cur_arg[1]);
@@ -412,6 +450,7 @@ int main_cpp(int argc, const char **argv) {
           "              [--log-level|-log <level>]\n"
           "              [--verbose|-v]\n"
           "              [--quiet-program-output|-q]\n"
+          "              [--stats-file <path>]\n"
           "              [--help|-h]\n"
           "              target_executable\n");
       exit(1);

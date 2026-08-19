@@ -16,6 +16,21 @@ void reporter::dump_relinearized_trace(std::ostream &os,
   }
 }
 
+void reporter::write_summary(std::ostream &os, const stats &s) const {
+  os << "mcmini_stats_version=1\n"
+     << "traces=" << s.trace_id << "\n"
+     << "transitions=" << s.total_transitions << "\n"
+     << "exhausted=" << (s.exhausted ? "yes" : "no") << "\n"
+     << "max_depth_per_thread=" << max_depth_per_thread << "\n"
+     << "max_depth_per_trace=" << max_depth_per_trace << "\n"
+     << "transition_ceiling=" << MAX_TOTAL_TRANSITIONS_IN_PROGRAM << "\n"
+     << "check_ms=" << s.check_ms << "\n"
+     << "violations_deadlock=" << s.deadlocks << "\n"
+     << "violations_undefined_behavior=" << s.undefined_behaviors << "\n"
+     << "violations_abnormal_termination=" << s.abnormal_terminations << "\n"
+     << "violations_nonzero_exit_code=" << s.nonzero_exit_codes << std::endl;
+}
+
 void reporter::trace_completed(const algorithm::context &c,
                                const stats &stats) const {
   if (!verbose) return;

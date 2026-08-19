@@ -21,10 +21,10 @@ public:
       double_dispatch_member_function_table<const model::transition,
                                             bool(void)>;
 
-  void verify_using(coordinator &, const callbacks &) override;
-  void verify_using(coordinator &coordinator) {
+  stats verify_using(coordinator &, const callbacks &) override;
+  stats verify_using(coordinator &coordinator) {
     callbacks no_callbacks;
-    this->verify_using(coordinator, no_callbacks);
+    return this->verify_using(coordinator, no_callbacks);
   }
   static dependency_relation_type default_dependencies();
   static coenabled_relation_type default_coenabledness();

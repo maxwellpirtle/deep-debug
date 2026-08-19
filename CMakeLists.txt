@@ -128,5 +128,6 @@ target_link_libraries(mcmini PUBLIC scip)
 target_compile_definitions(mcmini PUBLIC MCMINI_USE_SCIP)
 endif()
 
+add_subdirectory(bench)
 add_subdirectory(src/examples)
 add_subdirectory(test)
