@@ -3,6 +3,10 @@ set(BENCH_PROGRAMS
   mutex-clean
   sem-bug
   sem-clean
+  cv-bug
+  cv-clean
+  mixed-bug
+  mixed-clean
 )
 
 # Benchmark binaries land next to `libmcmini.so` at the top of the build tree.
