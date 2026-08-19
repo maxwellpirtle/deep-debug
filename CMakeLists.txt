@@ -89,6 +89,18 @@ set(MCMINI_EXTRA_COMPILER_DEFINITIONS "")
 set(MCMINI_EXTRA_LINK_FLAGS -lrt -pthread)
 
 set(LIBMCMINI_EXTRA_COMPILER_FLAGS -Wall -Werror -fPIC)
+
+# NDEBUG configurations compile every assert() away, which leaves the variables
+# those asserts check unused and turns -Werror into a hard build failure. The
+# variables are not dead stores, and suppressing the warning here keeps the fix
+# out of src/lib/ and src/common/, where upstream work is concentrated. Debug
+# builds keep -Wunused-variable in full force.
+if(CMAKE_BUILD_TYPE STREQUAL "Release"
+    OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"
+    OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
+  list(APPEND LIBMCMINI_EXTRA_COMPILER_FLAGS
+    -Wno-unused-variable -Wno-unused-but-set-variable)
+endif()
 set(LIBMCMINI_EXTRA_COMPILER_DEFINITIONS MC_SHARED_LIBRARY=1 DMTCP=1 LOGGING_ROOT="${CMAKE_SOURCE_PATH}")
 
 # -lrt -> shared memory
