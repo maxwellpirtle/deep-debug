@@ -483,50 +483,222 @@ void check_semaphore_x_other_families() {
   }
 }
 
-/// The semaphore family's co-enabledness answer must come from the *registered*
-/// relation, not from the fallback.
+// MARK: The mutex family
+
+const objid_t THE_MUTEX = 300;
+const objid_t ANOTHER_MUTEX = 400;
+
+/// @brief One of each mutex leaf, all naming `mutex`, on three consecutive
+/// executors starting at `first_executor`.
 ///
-/// Both produce `true`, so the value alone proves nothing. The dispatch table's
-/// unregistered-pair observer is the only mechanical way to tell "analysed, and
-/// they really are co-enabled" from "nobody registered this" -- which is the
-/// distinction D-07 says the explicit registration exists to draw.
-void check_semaphore_coenabledness_does_not_fall_through() {
-  classic_dpor::coenabled_relation_type cr =
-      classic_dpor::default_coenabledness();
+/// Two rosters on the *same* mutex rather than one roster compared against
+/// itself: the diagonal of the sweep (`mutex_unlock` x `mutex_unlock`) needs
+/// two distinct objects, and on the distinct-id half it needs two objects
+/// naming two different mutexes.
+std::vector<transition_ptr> make_mutex_roster(runner_id_t first_executor,
+                                              objid_t mutex) {
+  std::vector<transition_ptr> r;
+  r.push_back(own(new mt::mutex_init(first_executor + 0, mutex)));
+  r.push_back(own(new mt::mutex_lock(first_executor + 1, mutex)));
+  r.push_back(own(new mt::mutex_unlock(first_executor + 2, mutex)));
+  return r;
+}
 
-  size_t fallbacks = 0;
-  cr.set_unregistered_pair_observer(
-      [&fallbacks](const std::type_info &, const std::type_info &) {
-        ++fallbacks;
-      });
+/// All nine ordered pairs of mutex leaves, on one mutex and on two.
+///
+/// The distinct-mutex half is the load-bearing one. A pair that fell through to
+/// the conservative fallback would answer "dependent" for both halves alike, so
+/// only the distinct-id assertions tell "registered and resolved" apart from
+/// "never registered" -- which is exactly the silent no-op a family-base
+/// registration would have produced. `mutex_unlock` x `mutex_unlock` on two
+/// mutexes is the assertion DEPS-03 names most directly: before this family,
+/// `mutex_unlock` carried no relation at all.
+void check_mutex_x_mutex() {
+  const classic_dpor::dependency_relation_type dr =
+      classic_dpor::default_dependencies();
 
-  const std::vector<transition_ptr> a = make_semaphore_roster(1, THE_SEM);
-  const std::vector<transition_ptr> b = make_semaphore_roster(5, THE_SEM);
-  const std::vector<transition_ptr> c = make_semaphore_roster(9, ANOTHER_SEM);
+  const std::vector<transition_ptr> a = make_mutex_roster(1, THE_MUTEX);
+  const std::vector<transition_ptr> b = make_mutex_roster(4, THE_MUTEX);
+  const std::vector<transition_ptr> c = make_mutex_roster(7, ANOTHER_MUTEX);
 
   for (size_t i = 0; i < a.size(); ++i) {
     for (size_t j = 0; j < b.size(); ++j) {
-      cr.call_or(true, a[i].get(), b[j].get());
-      cr.call_or(true, b[j].get(), a[i].get());
-      cr.call_or(true, a[i].get(), c[j].get());
-      cr.call_or(true, c[j].get(), a[i].get());
+      expect_both_orders(dr, *a[i], *b[j], true, "mutex x mutex, one mutex");
+      expect_both_orders(dr, *a[i], *c[j], false, "mutex x mutex, two mutexes");
     }
   }
-  CHECK(fallbacks == 0,
-        "every semaphore pair must be answered by a registered co-enabledness "
-        "relation, but "
-            << fallbacks << " reached the fallback");
 
-  // Positive control on the same table, so the zero above cannot pass merely
-  // because the observer was never wired up. Two `condition_variable_wait`s
-  // are part of D-14's deliberate leave-behind and reach the fallback.
-  const mt::condition_variable_wait waits_a(40, 1, 2);
-  const mt::condition_variable_wait waits_b(41, 1, 2);
-  cr.call_or(true, &waits_a, &waits_b);
-  CHECK(fallbacks == 1,
-        "the observer must fire for a genuinely unanswered co-enabledness "
-        "pair, saw "
-            << fallbacks);
+  // Named out of the sweep because it is the requirement itself, and a reader
+  // looking for DEPS-03 should find it spelled out rather than implied by a
+  // loop bound.
+  const mt::mutex_unlock unlocks_one(20, THE_MUTEX);
+  const mt::mutex_unlock unlocks_another(21, ANOTHER_MUTEX);
+  expect_both_orders(dr, unlocks_one, unlocks_another, false,
+                     "DEPS-03: unlocks of two distinct mutexes are independent");
+}
+
+/// The hand-written pairwise entries must keep winning over the family.
+///
+/// `condition_variable_wait` and `condition_variable_enqueue_thread` read and
+/// write the mutex object, so the family's "not a mutex operation, therefore
+/// independent" would be *unsound* for them. `call_or` consults `internal_table`
+/// -- where two-argument entries live -- before the interface table the family
+/// is registered in, and these six assertions are the mechanical guard on that
+/// ordering. If the family had taken the pairs over, every one would read
+/// "independent".
+void check_cv_x_mutex_pairwise_still_wins() {
+  const classic_dpor::dependency_relation_type dr =
+      classic_dpor::default_dependencies();
+
+  const objid_t the_mutex = 1;
+  const objid_t the_cv = 2;
+
+  const mt::condition_variable_wait waits(1, the_cv, the_mutex);
+  const mt::condition_variable_enqueue_thread enqueues(2, the_cv, the_mutex);
+
+  const std::vector<transition_ptr> mutexes = make_mutex_roster(3, the_mutex);
+
+  for (size_t i = 0; i < mutexes.size(); ++i) {
+    expect_both_orders(dr, waits, *mutexes[i], true,
+                       "the pairwise cond-wait x mutex entry must still win "
+                       "over the mutex family");
+    expect_both_orders(dr, enqueues, *mutexes[i], true,
+                       "the pairwise cv-enqueue x mutex entry must still win "
+                       "over the mutex family");
+  }
+}
+
+/// The cross-family half: no transition outside the mutex family other than the
+/// two guarded above reads or writes a mutex, so none of them conflicts with
+/// one.
+///
+/// Each partner is tested twice, once carrying an id numerically equal to the
+/// mutex's and once not. Ids are drawn from a single `objid_t` space, so
+/// numeric equality across families is possible and must not be mistaken for
+/// "same object" -- the relation distinguishes them by `dynamic_cast`, not by
+/// id.
+void check_mutex_x_other_families() {
+  const classic_dpor::dependency_relation_type dr =
+      classic_dpor::default_dependencies();
+
+  const std::vector<transition_ptr> mutexes = make_mutex_roster(1, THE_MUTEX);
+
+  // `thread_start` and `thread_exit` answer on their own executor, and
+  // `thread_create` / `thread_join` on their target, so the roster below uses
+  // runners no mutex transition executes on. A creation of the very thread that
+  // then locks a mutex genuinely is dependent, and that is a claim about
+  // runners rather than about mutexes.
+  const runner_id_t RID_UNRELATED = 90;
+
+  std::vector<transition_ptr> partners;
+  partners.push_back(own(new mt::sem_init(20, THE_MUTEX)));
+  partners.push_back(own(new mt::sem_init(21, ANOTHER_MUTEX)));
+  partners.push_back(own(new mt::sem_post(22, THE_MUTEX)));
+  partners.push_back(own(new mt::sem_post(23, ANOTHER_MUTEX)));
+  partners.push_back(own(new mt::sem_wait(24, THE_MUTEX)));
+  partners.push_back(own(new mt::sem_wait(25, ANOTHER_MUTEX)));
+  partners.push_back(own(new mt::sem_destroy(26, THE_MUTEX)));
+  partners.push_back(own(new mt::sem_destroy(27, ANOTHER_MUTEX)));
+  partners.push_back(own(new mt::thread_start(RID_UNRELATED)));
+  partners.push_back(own(new mt::thread_exit(RID_UNRELATED)));
+  partners.push_back(own(new mt::process_exit(28)));
+  partners.push_back(own(new mt::process_abort(29)));
+
+  for (size_t i = 0; i < mutexes.size(); ++i) {
+    for (size_t j = 0; j < partners.size(); ++j) {
+      expect_both_orders(dr, *mutexes[i], *partners[j], false,
+                         "mutex x non-mutex");
+    }
+  }
+}
+
+/// D-05's precedence must have survived the reparent: for the two pairs
+/// `mutex_lock` declares by hand, the table's answer must be the one that
+/// method returns.
+///
+/// The family agrees with both -- each reduces to the same `mutex_id` equality
+/// -- so this cannot distinguish which one answered. That is the point: the
+/// pairwise entries are kept *because* they are the authoritative statement
+/// (D-20), and this assertion pins that they still compile, are still
+/// registered, and have not drifted away from the family's answer.
+void check_mutex_lock_pairwise_precedence() {
+  const classic_dpor::dependency_relation_type dr =
+      classic_dpor::default_dependencies();
+
+  const mt::mutex_lock locks(1, THE_MUTEX);
+  const mt::mutex_init inits(2, THE_MUTEX);
+  const mt::mutex_lock locks_too(3, THE_MUTEX);
+  const mt::mutex_init inits_other(4, ANOTHER_MUTEX);
+  const mt::mutex_lock locks_other(5, ANOTHER_MUTEX);
+
+  expect_both_orders(dr, locks, inits, locks.depends(&inits),
+                     "mutex_lock x mutex_init must equal the pairwise answer");
+  expect_both_orders(
+      dr, locks, locks_too, locks.depends(&locks_too),
+      "mutex_lock x mutex_lock must equal the pairwise answer");
+  expect_both_orders(
+      dr, locks, inits_other, locks.depends(&inits_other),
+      "mutex_lock x mutex_init on two mutexes must equal the pairwise answer");
+  expect_both_orders(
+      dr, locks, locks_other, locks.depends(&locks_other),
+      "mutex_lock x mutex_lock on two mutexes must equal the pairwise answer");
+}
+
+/// Neither the semaphore family nor the mutex family may declare a
+/// whole-interface co-enabledness entry, because a blanket `true` would veto a
+/// proof.
+///
+/// `call_or`'s two-sided rule asks both whole-interface entries when both types
+/// declare one and returns the fallback if either answers it. `true` *is* the
+/// co-enabledness fallback, so a family entry that can only answer `true`
+/// silently overrides `thread_create::coenabled_with` and
+/// `thread_join::coenabled_with`, whose `false` for a transition executed by
+/// the created or joined thread is a proof: a thread cannot act before it is
+/// created or after it has been joined.
+///
+/// This is the regression test for that defect. It is written on the values
+/// rather than on the observer because the values genuinely differ: with a
+/// family entry registered, every assertion below flips to `true`.
+void check_family_coenabledness_does_not_veto_thread_proofs() {
+  const classic_dpor::coenabled_relation_type cr =
+      classic_dpor::default_coenabledness();
+
+  const runner_id_t RID_TARGET = 50;
+  const runner_id_t RID_UNRELATED = 51;
+  const objid_t the_object = 1;
+
+  const mt::thread_create creates(1, RID_TARGET);
+  const mt::thread_join joins(2, RID_TARGET);
+  const mt::thread_create creates_unrelated(3, RID_UNRELATED);
+  const mt::thread_join joins_unrelated(4, RID_UNRELATED);
+
+  // Every family leaf, executed by the thread being created or joined.
+  std::vector<transition_ptr> by_target;
+  by_target.push_back(own(new mt::sem_init(RID_TARGET, the_object)));
+  by_target.push_back(own(new mt::sem_post(RID_TARGET, the_object)));
+  by_target.push_back(own(new mt::sem_wait(RID_TARGET, the_object)));
+  by_target.push_back(own(new mt::sem_destroy(RID_TARGET, the_object)));
+  by_target.push_back(own(new mt::mutex_init(RID_TARGET, the_object)));
+  by_target.push_back(own(new mt::mutex_lock(RID_TARGET, the_object)));
+  by_target.push_back(own(new mt::mutex_unlock(RID_TARGET, the_object)));
+
+  for (size_t i = 0; i < by_target.size(); ++i) {
+    expect_both_orders(cr, creates, *by_target[i], false,
+                       "a thread's creation is not co-enabled with that "
+                       "thread's own operation");
+    expect_both_orders(cr, joins, *by_target[i], false,
+                       "a thread's join is not co-enabled with that thread's "
+                       "own operation");
+
+    // The control: the same claim must not collapse into "nothing is
+    // co-enabled". An unrelated thread's creation or join says nothing.
+    expect_both_orders(cr, creates_unrelated, *by_target[i], true,
+                       "an unrelated thread's creation is co-enabled with a "
+                       "family operation");
+    expect_both_orders(cr, joins_unrelated, *by_target[i], true,
+                       "an unrelated thread's join is co-enabled with a family "
+                       "operation");
+  }
 }
 
 }  // namespace
@@ -545,7 +717,11 @@ int main() {
   check_broadcast_and_destroy();
   check_semaphore_x_semaphore();
   check_semaphore_x_other_families();
-  check_semaphore_coenabledness_does_not_fall_through();
+  check_mutex_x_mutex();
+  check_cv_x_mutex_pairwise_still_wins();
+  check_mutex_x_other_families();
+  check_mutex_lock_pairwise_precedence();
+  check_family_coenabledness_does_not_veto_thread_proofs();
 
   if (g_failures > 0) {
     std::cerr << g_failures << " check(s) failed" << std::endl;

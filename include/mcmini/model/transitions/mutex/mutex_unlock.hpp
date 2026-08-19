@@ -1,18 +1,15 @@
 #pragma once
 
 #include "mcmini/model/objects/mutex.hpp"
-#include "mcmini/model/transition.hpp"
+#include "mcmini/model/transitions/mutex/mutex_transition.hpp"
 
 namespace model {
 namespace transitions {
 
-struct mutex_unlock : public model::transition {
- private:
-  const state::objid_t mutex_id; /* The mutex this transition unlocks */
-
+struct mutex_unlock : public mutex_transition {
  public:
   mutex_unlock(runner_id_t executor, state::objid_t mutex_id)
-      : transition(executor), mutex_id(mutex_id) {}
+      : mutex_transition(executor, mutex_id) {}
   ~mutex_unlock() = default;
 
   status modify(model::mutable_state& s) const override {
@@ -28,7 +25,6 @@ struct mutex_unlock : public model::transition {
     s.add_state_for_obj(mutex_id, new mutex(mutex::unlocked, ms->get_location(), 0));
     return status::exists;
   }
-  state::objid_t get_id() const { return this->mutex_id; }
   std::string to_string() const override {
     return "pthread_mutex_unlock(mutex:" + std::to_string(mutex_id) + ")";
   }

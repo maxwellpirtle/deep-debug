@@ -30,6 +30,7 @@
 #include "mcmini/model/transitions/condition_variables/callbacks.hpp"
 #include "mcmini/model/transitions/mutex/callbacks.hpp"
 #include "mcmini/model/transitions/mutex/mutex_init.hpp"
+#include "mcmini/model/transitions/mutex/mutex_transition.hpp"
 #include "mcmini/model/transitions/process/abort.hpp"
 #include "mcmini/model/transitions/process/exit.hpp"
 #include "mcmini/model/transitions/semaphore/callbacks.hpp"
@@ -641,6 +642,24 @@ classic_dpor::dependency_relation_type classic_dpor::default_dependencies() {
   dr.register_dd_entry<const transitions::sem_destroy>(
       &semaphore_transition::depends);
 
+  // The mutex family, one line per *concrete* leaf for the same reason as the
+  // semaphore family: `call_or` keys on the dynamic `type_index`, so an entry
+  // filed under `mutex_transition` would match nothing and silently leave every
+  // mutex pair on the fallback. The explicit `<const LeafType>` argument is
+  // what files the entry under the leaf -- without it, deduction picks
+  // `mutex_transition` from the member-function pointer.
+  //
+  // These are registered *after* the six condition-variable x mutex pairs
+  // above, and that ordering is documentation only: `call_or` consults
+  // `internal_table` before the interface table regardless of registration
+  // order, so the hand-written pairs win outright and this family is never the
+  // voice on a mutex x condition-variable pair. See
+  // `mutex_transition::depends` for why that precedence is a soundness
+  // requirement rather than a preference.
+  dr.register_dd_entry<const mutex_init>(&mutex_transition::depends);
+  dr.register_dd_entry<const mutex_lock>(&mutex_transition::depends);
+  dr.register_dd_entry<const mutex_unlock>(&mutex_transition::depends);
+
   dr.set_unregistered_pair_observer(unregistered_pair_alarm("dependence"));
   return dr;
 }
@@ -686,20 +705,22 @@ classic_dpor::coenabled_relation_type classic_dpor::default_coenabledness() {
                        const mutex_unlock>(
       &condition_variable_enqueue_thread::coenabled_with);
 
-  // The semaphore family answers an explicit `true` -- see
-  // `semaphore_transition::coenabled_with` for why no semaphore pair has a
-  // provable `false`. Behaviourally identical to the fallback, but it records
-  // that the pair was analysed and keeps semaphores out of the alarm's output.
-  // Per concrete leaf, and qualified against the POSIX names, for the same two
-  // reasons as the dependence side.
-  cr.register_dd_entry<const transitions::sem_init>(
-      &semaphore_transition::coenabled_with);
-  cr.register_dd_entry<const transitions::sem_post>(
-      &semaphore_transition::coenabled_with);
-  cr.register_dd_entry<const transitions::sem_wait>(
-      &semaphore_transition::coenabled_with);
-  cr.register_dd_entry<const transitions::sem_destroy>(
-      &semaphore_transition::coenabled_with);
+  // Neither the semaphore family nor the mutex family registers a whole-
+  // interface co-enabledness entry, and that is deliberate. Each could only
+  // answer a blanket `true` -- every pair with a provable `false` is already a
+  // two-argument entry above -- and a blanket `true` is not free here. The
+  // two-sided rule in `call_or` asks both whole-interface entries when both
+  // types declare one and returns the fallback if either answers it, so a
+  // blanket `true` vetoes `thread_create::coenabled_with` and
+  // `thread_join::coenabled_with`, whose `false` for a transition executed by
+  // the created or joined thread is a proof. Measured cost of registering
+  // them anyway, at `--threads=3`: `mutex-bug` 38 -> 4827 traces, `mutex-clean`
+  // 34 -> 2982, `sem-bug` 21 -> 99. Unregistered, every pair of these families
+  // reaches the identical `true` through the fallback. See
+  // `mutex_transition.hpp` and `semaphore_transition.hpp` for the full note.
+  //
+  // The consequence is that these pairs appear in the alarm's output below.
+  // That is the honest reading: nothing claims them, and the fallback answers.
 
   cr.set_unregistered_pair_observer(unregistered_pair_alarm("co-enabledness"));
   return cr;

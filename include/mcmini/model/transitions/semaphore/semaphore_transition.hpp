@@ -59,29 +59,40 @@ struct semaphore_transition : public model::transition {
     return other != nullptr && other->sem_id == this->sem_id;
   }
 
-  /// @brief Every pair involving a semaphore operation may be co-enabled.
-  ///
-  /// Co-enabledness is a *static* relation over two transitions and takes no
-  /// state (D-06): it asks whether there is *some* state in which both could be
-  /// enabled, quantifying over states, so a `false` must be a proof that no
-  /// such state exists. That is why `mutex_lock::coenabled_with(mutex_unlock)`
-  /// needs nothing but the two ids -- lock requires the mutex unlocked, unlock
-  /// requires it locked, and no state satisfies both.
-  ///
-  /// Applied honestly to semaphores there is no such proof. `sem_wait(A)` and
-  /// `sem_post(A)` are both enabled in any state with count > 0; so are two
-  /// `sem_wait(A)`s; and anything on distinct semaphores is trivially
-  /// co-enabled. A count-based rule would hold only under "there exists a state
-  /// *reachable in this program*", and deciding that is the model-checking
-  /// problem itself -- the original McMini approximated it from a shadow count,
-  /// which under-approximates and drops races.
-  ///
-  /// So this answers an explicit `true`. It is behaviourally identical to the
-  /// table's fallback, but it records that the pair was analysed rather than
-  /// overlooked, and it keeps the semaphore family out of the unregistered-pair
-  /// alarm's output, which is exactly the distinction that alarm exists to
-  /// draw.
-  bool coenabled_with(const model::transition* t) const { return true; }
+  // MARK: Why this family declares no co-enabledness relation
+  //
+  // Co-enabledness is a *static* relation over two transitions and takes no
+  // state (D-06): it asks whether there is *some* state in which both could be
+  // enabled, quantifying over states, so a `false` must be a proof that no such
+  // state exists. That is why `mutex_lock::coenabled_with(mutex_unlock)` needs
+  // nothing but the two ids -- lock requires the mutex unlocked, unlock
+  // requires it held by the unlocking thread, and no state satisfies both.
+  //
+  // Applied honestly to semaphores there is no such proof. `sem_wait(A)` and
+  // `sem_post(A)` are both enabled in any state with count > 0; so are two
+  // `sem_wait(A)`s; and anything on distinct semaphores is trivially
+  // co-enabled. A count-based rule would hold only under "there exists a state
+  // *reachable in this program*", and deciding that is the model-checking
+  // problem itself -- the original McMini approximated it from a shadow count,
+  // which under-approximates and drops races. So the family has nothing to
+  // claim but a blanket `true`.
+  //
+  // A blanket `true` looks free -- it is the table's own fallback value -- and
+  // it is not. `call_or`'s two-sided rule (plan 02-01) asks *both* whole-
+  // interface entries when both types declare one, and returns the fallback if
+  // either answers it. `thread_create::coenabled_with` and
+  // `thread_join::coenabled_with` answer a *proven* `false` for any transition
+  // executed by the thread being created or joined -- a created thread cannot
+  // act before it exists, and a joined thread cannot act after it has exited.
+  // A blanket `true` here vetoes both proofs, because a fallback-valued answer
+  // is indistinguishable from a claim.
+  //
+  // That is not a soundness loss but it is a large reduction loss, measured:
+  // `sem-bug` 21 -> 99 traces and `sem-clean` 8 -> 10 at `--threads=3` with the
+  // registration present (plan 02-03 found it while mirroring this header, and
+  // removed it from both families). Semaphore pairs reach the *identical* `true`
+  // through the fallback. The analysis D-07 wanted recorded lives here, in the
+  // header, rather than in an entry that suppresses other families' proofs.
 };
 
 }  // namespace transitions
