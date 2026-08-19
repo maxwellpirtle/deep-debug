@@ -124,6 +124,10 @@ model::state::objid_t model_to_system_map::get_model_of_object(
   return model::invalid_objid;
 }
 
+const model::state &model_to_system_map::get_current_model_state() const {
+  return _coordinator.current_program_model.get_current_state();
+}
+
 model::state::objid_t model_to_system_map::observe_object(
     real_world::remote_address<void> rp_vobj_handle,
     const model::visible_object_state *vobs) {

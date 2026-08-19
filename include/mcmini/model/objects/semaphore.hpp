@@ -27,6 +27,7 @@ struct semaphore : public model::visible_object_state {
   void destroy() { this->current_state = state::destroyed; }
   unsigned count() const { return this->_count; }
   bool will_block() const { return this->_count <= 0; }
+  bool is_destroyed() const { return this->current_state == state::destroyed; }
   std::unique_ptr<visible_object_state> clone() const override {
     return extensions::make_unique<semaphore>(*this);
   }

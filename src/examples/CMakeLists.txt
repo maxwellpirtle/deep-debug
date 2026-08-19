@@ -14,3 +14,17 @@ target_link_libraries(cv-test PUBLIC -pthread)
 target_link_libraries(deadly-embrace PUBLIC -pthread)
 target_link_libraries(producer-consumer PUBLIC -pthread)
 target_link_libraries(recycled-thread PUBLIC -pthread libmcmini)
+
+# The two `sem_destroy` controls land next to `libmcmini.so` at the top of the
+# build tree, unlike every other example here.
+# `target::set_preload_libmcmini()` derives LD_PRELOAD from the directory of
+# the target program, so a program placed anywhere else names a preload path
+# that does not exist and dies before model checking begins. `bench/` carries
+# the same property for the same reason.
+foreach(sem_destroy_example sem-destroy-clean sem-destroy-uaf)
+  add_executable(${sem_destroy_example} ${sem_destroy_example}.c)
+  target_link_libraries(${sem_destroy_example} PUBLIC -pthread)
+  target_compile_options(${sem_destroy_example} PRIVATE -Wall)
+  set_target_properties(${sem_destroy_example} PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+endforeach()

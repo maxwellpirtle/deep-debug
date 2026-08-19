@@ -52,6 +52,28 @@ class model_to_system_map final {
     return get_model_of_object(addr) != model::invalid_objid;
   }
 
+  /**
+   * @brief The model state the coordinator has reached, for reading only.
+   *
+   * A translation callback decides which operation a thread is about to
+   * perform, and whether that operation is even legal can depend on what
+   * earlier transitions did to the object it names: a `sem_wait` on a
+   * semaphore some earlier transition destroyed is undefined behaviour, and
+   * the callback is the only place where that is knowable before the
+   * operation is admitted into the model. Resolving the object with
+   * `get_model_of_object()` answers *which* object; this answers what has
+   * happened to it.
+   *
+   * The reference is `const` and this method is `const`, so a callback can
+   * interrogate model state and cannot write it. Callers pair this with
+   * `model::state::get_state_of_object<T>()` for the typed query, and must
+   * establish `contains()` first: an unmapped address resolves to
+   * `model::invalid_objid`, and indexing the model with that is out of range.
+   *
+   * @return the current state, valid only for the duration of the call.
+   */
+  const model::state &get_current_model_state() const;
+
   using runner_generation_function =
       std::function<const model::transition *(model::state::runner_id_t)>;
 
