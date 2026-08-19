@@ -109,6 +109,13 @@ class log_control {
                const std::string &message, const severity_level severity,
                const char *file = __FILE__, int line = __LINE__);
 
+  /// @brief Answer whether a message from `subsystem` at `severity` would
+  /// pass the active filter, without formatting or emitting anything.
+  ///
+  /// Mirrors `log_raw`'s filtering exactly: no installed filter admits
+  /// everything, and an empty subsystem resolves to the global fallback name.
+  bool is_enabled(const std::string &subsystem, severity_level severity);
+
  private:
   RWLock filter_lock;
   std::unique_ptr<filter> active_filter;

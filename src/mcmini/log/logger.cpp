@@ -29,6 +29,17 @@ void log_control::set_filter(filter *filt) {
   this->active_filter.reset(filt);
 }
 
+bool log_control::is_enabled(const std::string &subsystem,
+                             severity_level severity) {
+  // Initialized once (C++11 magic statics): the empty-subsystem fallback must
+  // not replicate `log_raw`'s per-call `"global"` string construction.
+  static const std::string global_subsystem("global");
+  RWLock::ReadGuard guard(this->filter_lock);
+  if (!active_filter) return true;
+  return active_filter->apply(subsystem.empty() ? global_subsystem : subsystem,
+                              severity);
+}
+
 static std::string filename_from_path(const char *path) {
   std::string p(path);
   auto pos = p.find_last_of("/\\");

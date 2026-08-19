@@ -52,13 +52,12 @@ void coordinator::execute_runner(process::runner_id_t runner_id) {
         "Failed to execute runner with id \"" + std::to_string(runner_id) +
         "\": the process is not alive");
   }
-  log_debug(logger) << "Scheduling `" << runner_id << "` for execution."
-                    << logging::severity_level::verbose
-                    << "The next transition is `"
-                    << this->current_program_model
-                           .get_pending_transition_for(runner_id)
-                           ->debug_string()
-                    << "`";
+  log_debug(logger) << "Scheduling `" << runner_id << "` for execution.";
+  log_verbose(logger) << "The next transition is `"
+                      << this->current_program_model
+                             .get_pending_transition_for(runner_id)
+                             ->debug_string()
+                      << "`";
   volatile runner_mailbox *mb =
       this->current_process_handle->execute_runner(runner_id);
   model::transition_registry::runtime_type_id const rttid = mb->type;
