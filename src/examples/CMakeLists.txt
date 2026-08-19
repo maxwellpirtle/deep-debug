@@ -28,3 +28,17 @@ foreach(sem_destroy_example sem-destroy-clean sem-destroy-uaf)
   set_target_properties(${sem_destroy_example} PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 endforeach()
+
+# The static-initializer controls (v1.1) follow the sem_destroy pair's
+# placement for the same reason: `target::set_preload_libmcmini()` derives
+# LD_PRELOAD from the directory of the target program, so these binaries must
+# sit next to `libmcmini.so` at the top of the build tree or the run dies
+# before model checking begins. Like the sem_destroy pair, they never join the
+# frozen benchmark suite or any measurement path.
+foreach(static_init_control mutex-static-clean mutex-garbage-ub)
+  add_executable(${static_init_control} ${static_init_control}.c)
+  target_link_libraries(${static_init_control} PUBLIC -pthread)
+  target_compile_options(${static_init_control} PRIVATE -Wall)
+  set_target_properties(${static_init_control} PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+endforeach()
